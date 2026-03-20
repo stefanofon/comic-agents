@@ -5,10 +5,8 @@ export default async function handler(req, res) {
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
-    return res.status(500).json({ error: "NO_KEY" });
+    return res.status(500).json({ error: "API key not configured" });
   }
-
-  const keyHint = apiKey.slice(0, 15) + "..." + apiKey.slice(-4);
 
   try {
     const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
@@ -30,11 +28,8 @@ export default async function handler(req, res) {
     });
 
     const data = await response.json();
-    if (!response.ok) {
-      return res.status(200).json({ error_detail: data, key_hint: keyHint });
-    }
     return res.status(200).json(data);
   } catch (error) {
-    return res.status(500).json({ error: error.message, key_hint: keyHint });
+    return res.status(500).json({ error: error.message });
   }
 }
