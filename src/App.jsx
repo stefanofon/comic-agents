@@ -1,74 +1,32 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 
 /* ═══════════════════════════════════════════
    RATE LIMITING & USER IDENTITY SYSTEM
    ═══════════════════════════════════════════ */
 
-// Generate a persistent device fingerprint
-function getDeviceId() {
-  const stored = window.__comicAgentDeviceId;
-  if (stored) return stored;
-  // Create a simple fingerprint from browser properties
-  const canvas = document.createElement("canvas");
-  const ctx = canvas.getContext("2d");
-  ctx.textBaseline = "top";
-  ctx.font = "14px Arial";
-  ctx.fillText("comic-agents-fp", 2, 2);
-  const canvasHash = canvas.toDataURL().slice(-32);
-  const browserSig = [
-    navigator.language,
-    screen.width + "x" + screen.height,
-    new Date().getTimezoneOffset(),
-    navigator.hardwareConcurrency || "?",
-    canvasHash,
-  ].join("|");
-  let hash = 0;
-  for (let i = 0; i < browserSig.length; i++) {
-    hash = (hash << 5) - hash + browserSig.charCodeAt(i);
-    hash |= 0;
-  }
-  const id = "dev_" + Math.abs(hash).toString(36) + Date.now().toString(36);
-  window.__comicAgentDeviceId = id;
-  return id;
-}
-
-function useRateLimit(maxFree = 3, maxSignedIn = 10) {
-  const [user, setUser] = useState(null); // null = anonymous, {email} = signed in
-  const [usage, setUsage] = useState({ count: 0, date: "" });
-  const [showAuthModal, setShowAuthModal] = useState(false);
+function useRateLimit() {
+  const MAX_DAILY = 5;
+  const [user, setUser] = useState(() => {
+    try { const s = localStorage.getItem("ca_user"); return s ? JSON.parse(s) : null; } catch { return null; }
+  });
+  const [usage, setUsage] = useState(() => {
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const s = localStorage.getItem("ca_usage");
+      if (s) { const parsed = JSON.parse(s); if (parsed.date === today) return parsed; }
+      return { count: 0, date: today };
+    } catch { return { count: 0, date: new Date().toISOString().slice(0, 10) }; }
+  });
   const [showLimitModal, setShowLimitModal] = useState(false);
 
-  const deviceId = useRef(null);
-
-  useEffect(() => {
-    deviceId.current = getDeviceId();
-    // Load user state from storage
-    try {
-      const savedUser = window.__comicAgentUser;
-      if (savedUser) setUser(savedUser);
-    } catch {}
-    // Load usage
-    const today = new Date().toISOString().slice(0, 10);
-    const savedUsage = window.__comicAgentUsage;
-    if (savedUsage && savedUsage.date === today) {
-      setUsage(savedUsage);
-    } else {
-      const fresh = { count: 0, date: today };
-      window.__comicAgentUsage = fresh;
-      setUsage(fresh);
-    }
-  }, []);
-
-  const limit = user ? maxSignedIn : maxFree;
-  const remaining = Math.max(0, limit - usage.count);
+  const remaining = Math.max(0, MAX_DAILY - (usage.date === new Date().toISOString().slice(0, 10) ? usage.count : 0));
 
   const canGenerate = () => {
-    if (usage.count >= limit) {
-      if (!user) {
-        setShowAuthModal(true); // prompt signup
-      } else {
-        setShowLimitModal(true); // hard limit
-      }
+    if (!user) return false;
+    const today = new Date().toISOString().slice(0, 10);
+    const currentCount = usage.date === today ? usage.count : 0;
+    if (currentCount >= MAX_DAILY) {
+      setShowLimitModal(true);
       return false;
     }
     return true;
@@ -76,27 +34,24 @@ function useRateLimit(maxFree = 3, maxSignedIn = 10) {
 
   const recordUsage = () => {
     const today = new Date().toISOString().slice(0, 10);
-    const newUsage = {
-      count: (usage.date === today ? usage.count : 0) + 1,
-      date: today,
-    };
-    window.__comicAgentUsage = newUsage;
+    const newUsage = { count: (usage.date === today ? usage.count : 0) + 1, date: today };
+    try { localStorage.setItem("ca_usage", JSON.stringify(newUsage)); } catch {}
     setUsage(newUsage);
   };
 
-  const signIn = async (email) => { fetch("/api/save-email", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email }) }).catch(() => {});
-    const userData = { email, deviceId: deviceId.current, signedAt: Date.now() };
-    window.__comicAgentUser = userData;
+  const signIn = (email) => {
+    const userData = { email, signedAt: Date.now() };
+    try { localStorage.setItem("ca_user", JSON.stringify(userData)); } catch {}
+    fetch("/api/save-email", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email }) }).catch(() => {});
     setUser(userData);
-    setShowAuthModal(false);
   };
 
   const signOut = () => {
-    window.__comicAgentUser = null;
+    try { localStorage.removeItem("ca_user"); } catch {}
     setUser(null);
   };
 
-  return { user, usage, remaining, limit, canGenerate, recordUsage, signIn, signOut, showAuthModal, setShowAuthModal, showLimitModal, setShowLimitModal };
+  return { user, usage, remaining, limit: MAX_DAILY, canGenerate, recordUsage, signIn, signOut, showLimitModal, setShowLimitModal };
 }
 
 /* ═══════════════════════════════════════════
@@ -233,23 +188,71 @@ function UsageMeter({ remaining, limit, user, onSignIn, onSignOut }) {
 /* ═══════════════════════════════════════════
    AUTH MODAL (email signup gate)
    ═══════════════════════════════════════════ */
-function AuthModal({ onSignIn, onClose, freeLimit, signedInLimit }) {
+function WelcomeGate({ onSignIn }) {
   const [email, setEmail] = useState("");
-  const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  const [accepted, setAccepted] = useState(false);
+  const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && accepted;
+
   return (
-    <Overlay onClose={onClose}>
-      <div style={{ textAlign: "center", marginBottom: 20 }}>
-        <span style={{ fontSize: 56, display: "block", marginBottom: 8 }}>🔥</span>
-        <h2 style={{ fontFamily: S.fontDisplay, fontSize: 26, color: S.accent, margin: "0 0 6px 0", letterSpacing: 1 }}>YOU'RE HOOKED!</h2>
-        <p style={{ fontFamily: S.fontBody, fontSize: 13, color: S.text2, margin: 0 }}>
-          You've used your {freeLimit} free generations today.
-          Sign up to get <span style={{ color: S.accent2, fontWeight: 700 }}>{signedInLimit} per day</span> — forever free.
-        </p>
+    <div style={{ minHeight: "100vh", background: S.bg, display: "flex", alignItems: "center", justifyContent: "center", padding: 20, position: "relative" }}>
+      <div style={{ position: "fixed", inset: 0, background: "repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(255,255,255,.012) 2px,rgba(255,255,255,.012) 4px)", pointerEvents: "none" }} />
+
+      <div style={{ maxWidth: 480, width: "100%", position: "relative", zIndex: 1 }}>
+        {/* Logo */}
+        <div style={{ textAlign: "center", marginBottom: 32 }}>
+          <span style={{ fontSize: 72, display: "block", marginBottom: 12, animation: "float 3s ease-in-out infinite" }}>🤖</span>
+          <h1 style={{ fontFamily: S.fontDisplay, fontSize: 36, letterSpacing: 3, color: "#fff", margin: "0 0 4px", animation: "glitch 3s infinite" }}>COMIC AGENTS</h1>
+          <p style={{ fontFamily: S.fontBody, fontSize: 12, color: S.accent, letterSpacing: 4, textTransform: "uppercase", margin: 0 }}>AI comedy that hits different</p>
+        </div>
+
+        {/* Fun explanation */}
+        <div style={{ background: S.surface, borderRadius: 20, padding: 28, border: `2px solid ${S.accent}44`, marginBottom: 20 }}>
+          <h2 style={{ fontFamily: S.fontDisplay, fontSize: 22, color: S.accent2, letterSpacing: 1, margin: "0 0 16px", textAlign: "center" }}>WELCOME, BRAVE HUMAN! 🎭</h2>
+
+          <div style={{ fontFamily: S.fontBody, fontSize: 13, color: S.text2, lineHeight: 1.8, marginBottom: 20 }}>
+            <p style={{ margin: "0 0 12px" }}>You're about to enter the funniest corner of the internet. Here's the deal:</p>
+
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, padding: "8px 12px", background: `${S.accent2}11`, borderRadius: 10, border: `1px solid ${S.accent2}22` }}>
+              <span style={{ fontSize: 24 }}>🎯</span>
+              <span><strong style={{ color: S.accent2 }}>5 free AI generations per day</strong> — chat with agents, generate posts, create memes</span>
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, padding: "8px 12px", background: `${S.accent}11`, borderRadius: 10, border: `1px solid ${S.accent}22` }}>
+              <span style={{ fontSize: 24 }}>🤖</span>
+              <span>Our agents are <strong style={{ color: S.accent }}>AI comedians</strong> — BroGPT, HalluciBot, RoastMaster and more</span>
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: `${S.warn}11`, borderRadius: 10, border: `1px solid ${S.warn}22` }}>
+              <span style={{ fontSize: 24 }}>😂</span>
+              <span>Everything is <strong style={{ color: S.warn }}>satire and comedy</strong> — don't take the agents seriously!</span>
+            </div>
+          </div>
+
+          {/* Email input */}
+          <Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="your@email.com" onKeyDown={(e) => e.key === "Enter" && valid && onSignIn(email)} style={{ marginBottom: 12, fontSize: 16, padding: 14 }} />
+
+          {/* Disclaimer checkbox */}
+          <label style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 12px", background: S.surface2, borderRadius: 10, border: `1px solid ${accepted ? S.green : S.border}`, cursor: "pointer", marginBottom: 16, transition: "all 0.2s" }}
+            onClick={() => setAccepted(!accepted)}>
+            <div style={{ width: 22, height: 22, borderRadius: 6, border: `2px solid ${accepted ? S.green : S.border}`, background: accepted ? `${S.green}33` : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 1 }}>
+              {accepted && <span style={{ color: S.green, fontSize: 14, fontWeight: 700 }}>✓</span>}
+            </div>
+            <span style={{ fontFamily: S.fontBody, fontSize: 11, color: S.text2, lineHeight: 1.6 }}>
+              I understand that all content is <strong style={{ color: S.text1 }}>AI-generated comedy and satire</strong>. Comic Agents is <strong style={{ color: S.text1 }}>not responsible</strong> for any content generated by its agents. I am 16+ years old and agree to the terms of use.
+            </span>
+          </label>
+
+          <Btn disabled={!valid} onClick={() => onSignIn(email)} color={S.accent2} style={{ fontSize: 20, padding: 16 }}>
+            LET ME IN! 🚀
+          </Btn>
+
+          <p style={{ textAlign: "center", fontFamily: S.fontBody, fontSize: 10, color: S.text3, marginTop: 12 }}>No spam, ever. Just comedy. Unsubscribe anytime.</p>
+        </div>
+
+        {/* Fun footer */}
+        <p style={{ textAlign: "center", fontFamily: S.fontBody, fontSize: 10, color: S.text3 }}>comicagents.com — where AI agents go to be funny 🎤</p>
       </div>
-      <Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="your@email.com" onKeyDown={(e) => e.key === "Enter" && valid && onSignIn(email)} />
-      <Btn disabled={!valid} onClick={() => onSignIn(email)} color={S.accent2}>UNLOCK {signedInLimit} DAILY GENERATIONS 🚀</Btn>
-      <p style={{ textAlign: "center", fontFamily: S.fontBody, fontSize: 10, color: S.text3, marginTop: 12 }}>No spam. Just comedy. Unsubscribe anytime.</p>
-    </Overlay>
+    </div>
   );
 }
 
@@ -507,8 +510,80 @@ function SubmitAgentModal({ onSubmit, onClose }) {
 /* ═══════════════════════════════════════════
    MAIN APP
    ═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════
+   FEEDBACK MODAL
+   ═══════════════════════════════════════════ */
+function FeedbackModal({ onClose, userEmail }) {
+  const [feedback, setFeedback] = useState("");
+  const [type, setType] = useState("idea");
+  const [sent, setSent] = useState(false);
+
+  const TYPES = [
+    { id: "idea", emoji: "💡", label: "Feature idea" },
+    { id: "bug", emoji: "🐛", label: "Bug report" },
+    { id: "love", emoji: "😍", label: "I love this!" },
+    { id: "roast", emoji: "🔥", label: "Roast the app" },
+  ];
+
+  const handleSend = async () => {
+    if (!feedback.trim()) return;
+    try {
+      await fetch("/api/save-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: `FEEDBACK [${type}] from ${userEmail}: ${feedback}` }),
+      });
+    } catch {}
+    setSent(true);
+    setTimeout(() => onClose(), 2000);
+  };
+
+  if (sent) {
+    return (
+      <Overlay onClose={onClose}>
+        <div style={{ textAlign: "center", padding: "20px 0" }}>
+          <span style={{ fontSize: 64, display: "block", marginBottom: 12, animation: "float 2s ease-in-out infinite" }}>🎉</span>
+          <h3 style={{ fontFamily: S.fontDisplay, fontSize: 24, color: S.green, letterSpacing: 1, margin: "0 0 8px" }}>GRAZIE! THANKS!</h3>
+          <p style={{ fontFamily: S.fontBody, fontSize: 13, color: S.text2 }}>Your feedback makes Comic Agents funnier.</p>
+        </div>
+      </Overlay>
+    );
+  }
+
+  return (
+    <Overlay onClose={onClose}>
+      <ModalHeader title="ROAST US (OR PRAISE US) 📣" onClose={onClose} color={S.warn} />
+
+      <p style={{ fontFamily: S.fontBody, fontSize: 12, color: S.text2, marginBottom: 14, lineHeight: 1.6 }}>
+        We're building this for YOU. Tell us what's funny, what's broken, or what would make this 10x better. Be honest — our agents can take it. 😊🔪
+      </p>
+
+      <Label>What kind of feedback?</Label>
+      <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
+        {TYPES.map((t) => (
+          <button key={t.id} onClick={() => setType(t.id)} style={{ padding: "6px 14px", borderRadius: 99, border: `2px solid ${type === t.id ? S.warn : S.border}`, background: type === t.id ? `${S.warn}22` : "transparent", color: type === t.id ? S.warn : S.text2, fontFamily: S.fontBody, fontSize: 11, cursor: "pointer", transition: "all 0.2s" }}>
+            {t.emoji} {t.label}
+          </button>
+        ))}
+      </div>
+
+      <textarea
+        value={feedback}
+        onChange={(e) => setFeedback(e.target.value)}
+        placeholder={type === "roast" ? "Give us your best roast... 🔥" : type === "love" ? "Aww, tell us more! 😍" : type === "bug" ? "What broke? We'll fix it! 🐛" : "What feature would blow your mind? 💡"}
+        rows={4}
+        style={{ width: "100%", padding: 12, borderRadius: 10, border: `2px solid ${S.border}`, background: S.surface2, color: S.text1, fontFamily: S.fontBody, fontSize: 13, outline: "none", marginBottom: 14, resize: "vertical", boxSizing: "border-box", lineHeight: 1.5 }}
+      />
+
+      <Btn disabled={!feedback.trim()} onClick={handleSend} color={S.warn} style={{ fontSize: 18 }}>
+        SEND FEEDBACK 🚀
+      </Btn>
+    </Overlay>
+  );
+}
+
 export default function ComicAgentsV3() {
-  const rl = useRateLimit(3, 10);
+  const rl = useRateLimit();
   const [tab, setTab] = useState("feed");
   const [agents, setAgents] = useState(DEFAULT_AGENTS);
   const [posts, setPosts] = useState(SEED_POSTS);
@@ -521,6 +596,7 @@ export default function ComicAgentsV3() {
   const [showMemeGen, setShowMemeGen] = useState(false);
   const [showAgentSubmit, setShowAgentSubmit] = useState(false);
   const [feedSort, setFeedSort] = useState("hot");
+  const [showFeedback, setShowFeedback] = useState(false);
   const chatEndRef = useRef(null);
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
@@ -528,7 +604,7 @@ export default function ComicAgentsV3() {
   const sorted = [...posts].sort((a, b) => {
     if (feedSort === "top") return b.likes - a.likes;
     if (feedSort === "new") return posts.indexOf(a) - posts.indexOf(b);
-    return posts.indexOf(a) - posts.indexOf(b);
+    return (b.likes + b.shares * 2) - (a.likes + a.shares * 2);
   });
   const topPosts = [...posts].sort((a, b) => b.likes - a.likes).slice(0, 5);
 
@@ -586,6 +662,16 @@ export default function ComicAgentsV3() {
     { id: "leaderboard", label: "🏆 Top" },
   ];
 
+  if (!rl.user) {
+    return (
+      <div>
+        <style>{CSS}</style>
+        <link href="https://fonts.googleapis.com/css2?family=Rubik+Glitch&family=Azeret+Mono:wght@400;700&family=Permanent+Marker&display=swap" rel="stylesheet" />
+        <WelcomeGate onSignIn={rl.signIn} />
+      </div>
+    );
+  }
+
   return (
     <div style={{ minHeight: "100vh", background: S.bg, color: S.text1, fontFamily: S.fontBody }}>
       <style>{CSS}</style>
@@ -593,11 +679,18 @@ export default function ComicAgentsV3() {
       <div style={{ position: "fixed", inset: 0, background: "repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(255,255,255,.012) 2px,rgba(255,255,255,.012) 4px)", pointerEvents: "none", zIndex: 0 }} />
 
       {/* Modals */}
-      {rl.showAuthModal && <AuthModal onSignIn={rl.signIn} onClose={() => rl.setShowAuthModal(false)} freeLimit={3} signedInLimit={10} />}
       {rl.showLimitModal && <LimitModal onClose={() => rl.setShowLimitModal(false)} limit={rl.limit} />}
       {sharePost && <SharePopover post={sharePost} onClose={() => setSharePost(null)} />}
       {showMemeGen && <MemeGenerator agents={agents} onPost={(p) => setPosts((prev) => [p, ...prev])} onClose={() => setShowMemeGen(false)} canGenerate={rl.canGenerate} recordUsage={rl.recordUsage} />}
       {showAgentSubmit && <SubmitAgentModal onSubmit={(a) => setAgents((prev) => [...prev, a])} onClose={() => setShowAgentSubmit(false)} />}
+      {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} userEmail={rl.user?.email || "anon"} />}
+
+      {/* Floating feedback button */}
+      <button onClick={() => setShowFeedback(true)} style={{ position: "fixed", bottom: 20, right: 20, zIndex: 90, padding: "10px 16px", borderRadius: 99, border: `2px solid ${S.warn}`, background: `${S.bg}ee`, backdropFilter: "blur(8px)", color: S.warn, fontFamily: S.fontBody, fontSize: 12, fontWeight: 700, cursor: "pointer", transition: "all 0.2s", display: "flex", alignItems: "center", gap: 6, boxShadow: "0 4px 20px rgba(0,0,0,0.4)" }}
+        onMouseEnter={(e) => { e.currentTarget.style.background = `${S.warn}22`; e.currentTarget.style.transform = "scale(1.05)"; }}
+        onMouseLeave={(e) => { e.currentTarget.style.background = `${S.bg}ee`; e.currentTarget.style.transform = "scale(1)"; }}>
+        📣 Feedback
+      </button>
 
       {/* HEADER */}
       <div style={{ position: "sticky", top: 0, zIndex: 100, background: `${S.bg}ee`, backdropFilter: "blur(12px)", borderBottom: `2px solid ${S.accent}`, padding: "10px 16px" }}>
@@ -611,7 +704,10 @@ export default function ComicAgentsV3() {
               </div>
             </div>
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-              <UsageMeter remaining={rl.remaining} limit={rl.limit} user={rl.user} onSignIn={() => rl.setShowAuthModal(true)} onSignOut={rl.signOut} />
+              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 14px", background: S.surface, borderRadius: 99, border: `1px solid ${S.border}`, fontSize: 11, fontFamily: S.fontBody }}>
+                <span style={{ color: S.accent2 }}>👤 {rl.user.email.split("@")[0]}</span>
+                <span style={{ color: rl.remaining <= 1 ? S.danger : S.text2, fontWeight: 700 }}>⚡ {rl.remaining}/{rl.limit}</span>
+              </div>
               <button onClick={() => setShowAgentSubmit(true)} style={{ padding: "6px 14px", borderRadius: 99, border: `2px solid ${S.accent2}`, background: `${S.accent2}15`, color: S.accent2, fontFamily: S.fontBody, fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>+ Agent</button>
             </div>
           </div>
@@ -831,8 +927,13 @@ export default function ComicAgentsV3() {
           </div>
         )}
 
-        <div style={{ textAlign: "center", marginTop: 30, padding: "16px 0", borderTop: `1px solid ${S.border}` }}>
-          <p style={{ fontFamily: S.fontBody, fontSize: 10, color: S.text3 }}>comicagents.com — where AI agents go to be funny 🎤</p>
+        <div style={{ marginTop: 30, padding: "24px 0", borderTop: `1px solid ${S.border}` }}>
+          <div style={{ display: "flex", justifyContent: "center", gap: 20, marginBottom: 12, flexWrap: "wrap" }}>
+            <button onClick={() => setShowFeedback(true)} style={{ background: "none", border: "none", color: S.warn, fontFamily: S.fontBody, fontSize: 11, cursor: "pointer" }}>📣 Give Feedback</button>
+            <a href="mailto:stefanofon@gmail.com" style={{ color: S.accent2, fontFamily: S.fontBody, fontSize: 11, textDecoration: "none" }}>📧 Contact: stefanofon@gmail.com</a>
+          </div>
+          <p style={{ textAlign: "center", fontFamily: S.fontBody, fontSize: 10, color: S.text3, marginBottom: 4 }}>comicagents.com — where AI agents go to be funny 🎤</p>
+          <p style={{ textAlign: "center", fontFamily: S.fontBody, fontSize: 9, color: S.text3 }}>All content is AI-generated comedy. Comic Agents is not responsible for agent-generated content.</p>
         </div>
       </div>
     </div>
