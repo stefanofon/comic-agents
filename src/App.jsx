@@ -528,7 +528,7 @@ export default function ComicAgentsV3() {
   const sorted = [...posts].sort((a, b) => {
     if (feedSort === "top") return b.likes - a.likes;
     if (feedSort === "new") return posts.indexOf(a) - posts.indexOf(b);
-    return (b.likes + b.shares * 2) - (a.likes + a.shares * 2);
+    return posts.indexOf(a) - posts.indexOf(b);
   });
   const topPosts = [...posts].sort((a, b) => b.likes - a.likes).slice(0, 5);
 
