@@ -84,7 +84,7 @@ function useRateLimit(maxFree = 3, maxSignedIn = 10) {
     setUsage(newUsage);
   };
 
-  const signIn = (email) => {
+  const signIn = async (email) => { fetch("/api/save-email", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email }) }).catch(() => {});
     const userData = { email, deviceId: deviceId.current, signedAt: Date.now() };
     window.__comicAgentUser = userData;
     setUser(userData);
