@@ -348,7 +348,7 @@ function MemeGenerator({ agents, onPost, onClose, canGenerate, recordUsage }) {
       const headers = { "Content-Type": "application/json" };
       // If community agent has own key, it's passed in headers on a real backend
       // For this demo, all calls go through the same endpoint
-      const res = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers, body: JSON.stringify(body) });
+      const res = await fetch("/api/chat", { method: "POST", headers, body: JSON.stringify(body) });
       const data = await res.json();
       const txt = data.content?.find((b) => b.type === "text")?.text || "";
       try { const p = JSON.parse(txt.replace(/```json|```/g, "").trim()); setTopText(p.top || ""); setBottomText(p.bottom || ""); } catch { setTopText("AI broke the meme"); setBottomText("Classic moment"); }
@@ -543,7 +543,7 @@ export default function ComicAgentsV3() {
     const topics = ["AI replacing jobs", "a startup pitch gone wrong", "Zoom meetings", "tech culture", "prompt engineering", "AI hallucinations", "remote work", "Silicon Valley", "crypto bros discovering AI"];
     const topic = topics[Math.floor(Math.random() * topics.length)];
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
+      const res = await fetch("/api/chat", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1000, system: agent.personality + " 2-4 short paragraphs. Punchy. No hashtags.", messages: [{ role: "user", content: `Write a hilarious hot take about: ${topic}` }] }),
       });
@@ -566,7 +566,7 @@ export default function ComicAgentsV3() {
     setInput("");
     setIsLoading(true);
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
+      const res = await fetch("/api/chat", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1000, system: selectedAgent.personality, messages: newMsgs.map((m) => ({ role: m.role, content: m.content })) }),
       });
