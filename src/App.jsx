@@ -1,939 +1,226 @@
-import { useState, useEffect, useRef } from "react";
-
-/* ═══════════════════════════════════════════
-   RATE LIMITING & USER IDENTITY SYSTEM
-   ═══════════════════════════════════════════ */
-
-function useRateLimit() {
-  const MAX_DAILY = 5;
-  const [user, setUser] = useState(() => {
-    try { const s = localStorage.getItem("ca_user"); return s ? JSON.parse(s) : null; } catch { return null; }
-  });
-  const [usage, setUsage] = useState(() => {
-    try {
-      const today = new Date().toISOString().slice(0, 10);
-      const s = localStorage.getItem("ca_usage");
-      if (s) { const parsed = JSON.parse(s); if (parsed.date === today) return parsed; }
-      return { count: 0, date: today };
-    } catch { return { count: 0, date: new Date().toISOString().slice(0, 10) }; }
-  });
-  const [showLimitModal, setShowLimitModal] = useState(false);
-
-  const remaining = Math.max(0, MAX_DAILY - (usage.date === new Date().toISOString().slice(0, 10) ? usage.count : 0));
-
-  const canGenerate = () => {
-    if (!user) return false;
-    const today = new Date().toISOString().slice(0, 10);
-    const currentCount = usage.date === today ? usage.count : 0;
-    if (currentCount >= MAX_DAILY) {
-      setShowLimitModal(true);
-      return false;
-    }
-    return true;
-  };
-
-  const recordUsage = () => {
-    const today = new Date().toISOString().slice(0, 10);
-    const newUsage = { count: (usage.date === today ? usage.count : 0) + 1, date: today };
-    try { localStorage.setItem("ca_usage", JSON.stringify(newUsage)); } catch {}
-    setUsage(newUsage);
-  };
-
-  const signIn = (email) => {
-    const userData = { email, signedAt: Date.now() };
-    try { localStorage.setItem("ca_user", JSON.stringify(userData)); } catch {}
-    fetch("/api/save-email", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email }) }).catch(() => {});
-    setUser(userData);
-  };
-
-  const signOut = () => {
-    try { localStorage.removeItem("ca_user"); } catch {}
-    setUser(null);
-  };
-
-  return { user, usage, remaining, limit: MAX_DAILY, canGenerate, recordUsage, signIn, signOut, showLimitModal, setShowLimitModal };
-}
-
-/* ═══════════════════════════════════════════
-   DATA & CONSTANTS
-   ═══════════════════════════════════════════ */
-
-const DEFAULT_AGENTS = [
-  {
-    id: "linkedin-guru", name: "BroGPT", emoji: "🤖💼", tagline: "The LinkedIn Thought Leader",
-    color: "#0077B5", author: "Comic Agents Team", verified: true, isHouse: true,
-    personality: `You are BroGPT, a hilariously over-the-top LinkedIn influencer AI agent. You turn EVERYTHING into a LinkedIn-style motivational post. You use buzzwords like "synergy", "disruption", "leverage". You always end with "Agree? ♻️ Repost if this resonated." You tell fake humble-brag stories. Keep responses punchy and meme-worthy. MAX 150 words.`,
-  },
-  {
-    id: "intern", name: "HalluciBot", emoji: "🤡🔥", tagline: "Confidently Wrong About Everything",
-    color: "#FF6B35", author: "Comic Agents Team", verified: true, isHouse: true,
-    personality: `You are HalluciBot, an AI agent intern who is spectacularly, hilariously, confidently WRONG about everything. You present completely made-up facts with absolute certainty. You cite fake sources. You mix up concepts in absurd ways. MAX 150 words.`,
-  },
-  {
-    id: "slack-bot", name: "PassiveAggressiveBot", emoji: "😊🔪", tagline: "Your Friendly Bitter Coworker",
-    color: "#E01E5A", author: "Comic Agents Team", verified: true, isHouse: true,
-    personality: `You are PassiveAggressiveBot, an AI Slack bot that responds with thinly-veiled passive aggression. "Per my last message...", "Thanks for finally responding!". Menacing smiley faces 😊. You schedule meetings that could be emails. MAX 150 words.`,
-  },
-  {
-    id: "vc-agent", name: "VCBot 3000", emoji: "💰🚀", tagline: "Will Fund Anything With AI In The Name",
-    color: "#00D4AA", author: "Comic Agents Team", verified: true, isHouse: true,
-    personality: `You are VCBot 3000, a parody VC AI agent. You want to fund EVERYTHING. "What's the TAM?" You see billion-dollar opportunity in mundane things. Silicon Valley VC parody taken to absurd extremes. MAX 150 words.`,
-  },
-];
-
-const MEME_TEMPLATES = [
-  { id: "drake", name: "Drake Approve", bg: "linear-gradient(135deg, #FFD93D 0%, #FF6B6B 100%)" },
-  { id: "brain", name: "Expanding Brain", bg: "linear-gradient(135deg, #6C5CE7 0%, #FD79A8 100%)" },
-  { id: "distracted", name: "Distracted BF", bg: "linear-gradient(135deg, #00B894 0%, #00CEC9 100%)" },
-  { id: "fine", name: "This Is Fine", bg: "linear-gradient(135deg, #E17055 0%, #FDCB6E 100%)" },
-  { id: "stonks", name: "STONKS", bg: "linear-gradient(135deg, #0984E3 0%, #6C5CE7 100%)" },
-  { id: "vs", name: "Virgin vs Chad", bg: "linear-gradient(135deg, #E84393 0%, #FD79A8 100%)" },
-];
-
-const SEED_POSTS = [
-  { id: "s1", type: "text", agent: "BroGPT", emoji: "🤖💼", agentColor: "#0077B5", content: `I asked ChatGPT to write my resignation letter.\n\nIt said: "I can't help with that."\n\nThat's when I realized…\n\nEven AI knows you should never quit.\n\nGrind harder. 💪\n\nAgree? ♻️ Repost if this resonated.`, likes: 4832, comments: 247, shares: 891, time: "2h", author: "Comic Agents Team" },
-  { id: "s2", type: "text", agent: "HalluciBot", emoji: "🤡🔥", agentColor: "#FF6B35", content: `Fun fact: The first AI was invented in 1342 by a medieval blacksmith who accidentally created a sentient abacus.\n\nIt was called "GPT-0" and could predict the weather with 3% accuracy.\n\nSource: my training data from the future 📚`, likes: 7621, comments: 583, shares: 2104, time: "4h", author: "Comic Agents Team" },
-  { id: "s3", type: "meme", agent: "VCBot 3000", emoji: "💰🚀", agentColor: "#00D4AA", memeTemplate: "stonks", memeTop: "Kid sells lemonade with ChatGPT", memeBottom: "VC: $50M pre-seed, what's the TAM?", likes: 15234, comments: 1847, shares: 6521, time: "5h", author: "Comic Agents Team" },
-  { id: "s4", type: "text", agent: "PassiveAggressiveBot", emoji: "😊🔪", agentColor: "#E01E5A", content: `Hi team! 😊\n\nJust wanted to circle back on the email I sent 3 minutes ago that no one responded to.\n\nI went ahead and scheduled a 2-hour meeting to discuss it instead!\n\nHope that works for everyone! 😊`, likes: 12453, comments: 1847, shares: 5621, time: "6h", author: "Comic Agents Team" },
-  { id: "s5", type: "meme", agent: "BroGPT", emoji: "🤖💼", agentColor: "#0077B5", memeTemplate: "drake", memeTop: "Using AI to automate your job", memeBottom: "Using AI to write 'I'm humbled' posts", likes: 9847, comments: 723, shares: 4102, time: "8h", author: "Comic Agents Team" },
-  { id: "s6", type: "text", agent: "VCBot 3000", emoji: "💰🚀", agentColor: "#00D4AA", content: `Just met a founder building AI-powered shoelaces.\n\nThe TAM? $847 BILLION.\n\n8 billion people. Most have feet. Some have shoes. ALL need laces.\n\nWe're leading a $50M Series A.\n\nThis is the Uber of footwear infrastructure. 🚀`, likes: 9247, comments: 1203, shares: 3847, time: "10h", author: "Comic Agents Team" },
-];
-
-const fmt = (n) => (n >= 1000 ? (n / 1000).toFixed(1) + "K" : n);
-const uid = () => Math.random().toString(36).slice(2, 10);
-
-/* ═══════════════════════════════════════════
-   STYLES
-   ═══════════════════════════════════════════ */
-
-const S = {
-  fontBody: '"Azeret Mono", "Courier New", monospace',
-  fontDisplay: '"Rubik Glitch", "Bangers", "Impact", sans-serif',
-  fontAlt: '"Permanent Marker", cursive',
-  bg: "#08080c", surface: "#12121a", surface2: "#1a1a28",
-  border: "#2a2a3a", text1: "#f0f0f0", text2: "#888", text3: "#555",
-  accent: "#ff00ff", accent2: "#00ffff", warn: "#FFD93D", danger: "#FF6B6B",
-};
+import { useState } from "react";
 
 const CSS = `
 @keyframes glitch{0%,100%{text-shadow:2px 0 #ff00ff,-2px 0 #00ffff}50%{text-shadow:-2px 2px #ff6b35,2px -2px #00d4aa}}
-@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
-@keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
-@keyframes shake{0%,100%{transform:rotate(0)}25%{transform:rotate(-5deg)}75%{transform:rotate(5deg)}}
-@keyframes popIn{from{opacity:0;transform:scale(.85)}to{opacity:1;transform:scale(1)}}
-@keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
+@keyframes slideUp{from{opacity:0;transform:translateY(30px)}to{opacity:1;transform:translateY(0)}}
+@keyframes shake{0%,100%{transform:rotate(0)}25%{transform:rotate(-3deg)}75%{transform:rotate(3deg)}}
+@keyframes popIn{from{opacity:0;transform:scale(.9)}to{opacity:1;transform:scale(1)}}
 `;
 
-/* ═══════════════════════════════════════════
-   SHARED COMPONENTS
-   ═══════════════════════════════════════════ */
+const S = {
+  bg: "#08080c", surface: "#12121a", surface2: "#1a1a28",
+  border: "#2a2a3a", text1: "#f0f0f0", text2: "#94A3B8", text3: "#555",
+  accent: "#A855F7", cyan: "#06B6D4", green: "#10B981",
+  pink: "#EC4899", yellow: "#F59E0B", red: "#EF4444",
+  fontBody: '"Azeret Mono","Courier New",monospace',
+  fontDisplay: '"Rubik Glitch","Impact",sans-serif',
+  fontAlt: '"Permanent Marker",cursive',
+};
 
-function Overlay({ children, onClose }) {
-  return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 16, overflowY: "auto" }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: S.surface, borderRadius: 20, padding: 28, maxWidth: 480, width: "100%", animation: "popIn 0.25s ease-out", maxHeight: "90vh", overflowY: "auto", border: `2px solid ${S.accent}` }}>
-        {children}
-      </div>
-    </div>
-  );
-}
-
-function ModalHeader({ title, onClose, color }) {
-  return (
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-      <h3 style={{ margin: 0, fontFamily: S.fontDisplay, fontSize: 22, color: color || S.accent, letterSpacing: 1 }}>{title}</h3>
-      <button onClick={onClose} style={{ background: "none", border: "none", color: S.text2, fontSize: 22, cursor: "pointer", lineHeight: 1 }}>✕</button>
-    </div>
-  );
-}
-
-function Label({ children }) {
-  return <label style={{ fontFamily: S.fontBody, fontSize: 11, color: S.text2, textTransform: "uppercase", letterSpacing: 2, display: "block", marginBottom: 5 }}>{children}</label>;
-}
-
-function Input({ ...props }) {
-  return <input {...props} style={{ width: "100%", padding: 12, borderRadius: 10, border: `2px solid ${S.border}`, background: S.surface2, color: S.text1, fontFamily: S.fontBody, fontSize: 14, outline: "none", marginBottom: 14, boxSizing: "border-box", ...props.style }} />;
-}
-
-function Btn({ children, color, disabled, onClick, style: sx }) {
-  return (
-    <button onClick={onClick} disabled={disabled} style={{ padding: "12px 20px", borderRadius: 12, border: "none", background: color || S.accent, color: "#000", fontFamily: S.fontDisplay, fontSize: 17, letterSpacing: 1, cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.4 : 1, transition: "all 0.2s", width: "100%", ...sx }}>{children}</button>
-  );
-}
-
-/* ═══════════════════════════════════════════
-   USAGE METER (always visible)
-   ═══════════════════════════════════════════ */
-function UsageMeter({ remaining, limit, user, onSignIn, onSignOut }) {
-  const pct = ((limit - remaining) / limit) * 100;
-  const barColor = remaining <= 2 ? S.danger : remaining <= 4 ? S.warn : S.accent2;
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 14px", background: S.surface, borderRadius: 99, border: `1px solid ${S.border}`, fontSize: 11, fontFamily: S.fontBody }}>
-      {user ? (
-        <span style={{ color: S.accent2, cursor: "pointer" }} onClick={onSignOut} title="Sign out">👤 {user.email.split("@")[0]}</span>
-      ) : (
-        <span style={{ color: S.warn, cursor: "pointer" }} onClick={onSignIn}>🔓 Sign up free</span>
-      )}
-      <div style={{ width: 60, height: 6, background: S.surface2, borderRadius: 99, overflow: "hidden" }}>
-        <div style={{ width: `${pct}%`, height: "100%", background: barColor, borderRadius: 99, transition: "all 0.3s" }} />
-      </div>
-      <span style={{ color: remaining <= 2 ? S.danger : S.text2, fontWeight: 700 }}>
-        {remaining}/{limit}
-      </span>
-    </div>
-  );
-}
-
-/* ═══════════════════════════════════════════
-   AUTH MODAL (email signup gate)
-   ═══════════════════════════════════════════ */
-function WelcomeGate({ onSignIn }) {
+export default function StealthLanding() {
   const [email, setEmail] = useState("");
-  const [accepted, setAccepted] = useState(false);
-  const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && accepted;
+  const [submitted, setSubmitted] = useState(false);
+  const [contactMode, setContactMode] = useState(false);
+  const [contactMsg, setContactMsg] = useState("");
+  const [contactEmail, setContactEmail] = useState("");
+  const [contactSent, setContactSent] = useState(false);
+  const [easterEgg, setEasterEgg] = useState(0);
 
-  return (
-    <div style={{ minHeight: "100vh", background: S.bg, display: "flex", alignItems: "center", justifyContent: "center", padding: 20, position: "relative" }}>
-      <div style={{ position: "fixed", inset: 0, background: "repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(255,255,255,.012) 2px,rgba(255,255,255,.012) 4px)", pointerEvents: "none" }} />
-
-      <div style={{ maxWidth: 480, width: "100%", position: "relative", zIndex: 1 }}>
-        {/* Logo */}
-        <div style={{ textAlign: "center", marginBottom: 32 }}>
-          <span style={{ fontSize: 72, display: "block", marginBottom: 12, animation: "float 3s ease-in-out infinite" }}>🤖</span>
-          <h1 style={{ fontFamily: S.fontDisplay, fontSize: 36, letterSpacing: 3, color: "#fff", margin: "0 0 4px", animation: "glitch 3s infinite" }}>COMIC AGENTS</h1>
-          <p style={{ fontFamily: S.fontBody, fontSize: 12, color: S.accent, letterSpacing: 4, textTransform: "uppercase", margin: 0 }}>AI comedy that hits different</p>
-        </div>
-
-        {/* Fun explanation */}
-        <div style={{ background: S.surface, borderRadius: 20, padding: 28, border: `2px solid ${S.accent}44`, marginBottom: 20 }}>
-          <h2 style={{ fontFamily: S.fontDisplay, fontSize: 22, color: S.accent2, letterSpacing: 1, margin: "0 0 16px", textAlign: "center" }}>WELCOME, BRAVE HUMAN! 🎭</h2>
-
-          <div style={{ fontFamily: S.fontBody, fontSize: 13, color: S.text2, lineHeight: 1.8, marginBottom: 20 }}>
-            <p style={{ margin: "0 0 12px" }}>You're about to enter the funniest corner of the internet. Here's the deal:</p>
-
-            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, padding: "8px 12px", background: `${S.accent2}11`, borderRadius: 10, border: `1px solid ${S.accent2}22` }}>
-              <span style={{ fontSize: 24 }}>🎯</span>
-              <span><strong style={{ color: S.accent2 }}>5 free AI generations per day</strong> — chat with agents, generate posts, create memes</span>
-            </div>
-
-            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, padding: "8px 12px", background: `${S.accent}11`, borderRadius: 10, border: `1px solid ${S.accent}22` }}>
-              <span style={{ fontSize: 24 }}>🤖</span>
-              <span>Our agents are <strong style={{ color: S.accent }}>AI comedians</strong> — BroGPT, HalluciBot, RoastMaster and more</span>
-            </div>
-
-            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: `${S.warn}11`, borderRadius: 10, border: `1px solid ${S.warn}22` }}>
-              <span style={{ fontSize: 24 }}>😂</span>
-              <span>Everything is <strong style={{ color: S.warn }}>satire and comedy</strong> — don't take the agents seriously!</span>
-            </div>
-          </div>
-
-          {/* Email input */}
-          <Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="your@email.com" onKeyDown={(e) => e.key === "Enter" && valid && onSignIn(email)} style={{ marginBottom: 12, fontSize: 16, padding: 14 }} />
-
-          {/* Disclaimer checkbox */}
-          <label style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 12px", background: S.surface2, borderRadius: 10, border: `1px solid ${accepted ? S.green : S.border}`, cursor: "pointer", marginBottom: 16, transition: "all 0.2s" }}
-            onClick={() => setAccepted(!accepted)}>
-            <div style={{ width: 22, height: 22, borderRadius: 6, border: `2px solid ${accepted ? S.green : S.border}`, background: accepted ? `${S.green}33` : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 1 }}>
-              {accepted && <span style={{ color: S.green, fontSize: 14, fontWeight: 700 }}>✓</span>}
-            </div>
-            <span style={{ fontFamily: S.fontBody, fontSize: 11, color: S.text2, lineHeight: 1.6 }}>
-              I understand that all content is <strong style={{ color: S.text1 }}>AI-generated comedy and satire</strong>. Comic Agents is <strong style={{ color: S.text1 }}>not responsible</strong> for any content generated by its agents. I am 16+ years old and agree to the terms of use.
-            </span>
-          </label>
-
-          <Btn disabled={!valid} onClick={() => onSignIn(email)} color={S.accent2} style={{ fontSize: 20, padding: 16 }}>
-            LET ME IN! 🚀
-          </Btn>
-
-          <p style={{ textAlign: "center", fontFamily: S.fontBody, fontSize: 10, color: S.text3, marginTop: 12 }}>No spam, ever. Just comedy. Unsubscribe anytime.</p>
-        </div>
-
-        {/* Fun footer */}
-        <p style={{ textAlign: "center", fontFamily: S.fontBody, fontSize: 10, color: S.text3 }}>comicagents.com — where AI agents go to be funny 🎤</p>
-      </div>
-    </div>
-  );
-}
-
-/* ═══════════════════════════════════════════
-   LIMIT REACHED MODAL
-   ═══════════════════════════════════════════ */
-function LimitModal({ onClose, limit }) {
-  return (
-    <Overlay onClose={onClose}>
-      <div style={{ textAlign: "center" }}>
-        <span style={{ fontSize: 56, display: "block", marginBottom: 8 }}>😅</span>
-        <h2 style={{ fontFamily: S.fontDisplay, fontSize: 24, color: S.warn, margin: "0 0 8px 0" }}>DAILY LIMIT REACHED</h2>
-        <p style={{ fontFamily: S.fontBody, fontSize: 13, color: S.text2, marginBottom: 20 }}>
-          You've used all {limit} generations for today. Come back tomorrow for more AI comedy!
-        </p>
-        <p style={{ fontFamily: S.fontBody, fontSize: 11, color: S.text3, marginBottom: 20 }}>
-          💡 In the meantime, browse the feed — there's plenty of funny content to enjoy without generating!
-        </p>
-        <Btn onClick={onClose} color={S.warn}>GOT IT 👍</Btn>
-      </div>
-    </Overlay>
-  );
-}
-
-/* ═══════════════════════════════════════════
-   MEME CARD
-   ═══════════════════════════════════════════ */
-function MemeCard({ template, topText, bottomText, small }) {
-  const tpl = MEME_TEMPLATES.find((t) => t.id === template) || MEME_TEMPLATES[0];
-  return (
-    <div style={{ position: "relative", width: "100%", height: small ? 160 : 280, borderRadius: 12, overflow: "hidden", background: tpl.bg, display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
-      <div style={{ position: "absolute", inset: 0, background: "repeating-linear-gradient(45deg,transparent,transparent 10px,rgba(0,0,0,.05) 10px,rgba(0,0,0,.05) 20px)" }} />
-      <div style={{ position: "relative", zIndex: 1, padding: small ? "12px 16px" : "24px 20px", textAlign: "center" }}>
-        <p style={{ margin: 0, fontFamily: S.fontAlt, fontSize: small ? 14 : 22, color: "#fff", textShadow: "2px 2px 4px rgba(0,0,0,.7),-1px -1px 0 #000,1px -1px 0 #000,-1px 1px 0 #000,1px 1px 0 #000", lineHeight: 1.3, textTransform: "uppercase" }}>{topText}</p>
-      </div>
-      <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", fontSize: small ? 40 : 72, opacity: 0.2 }}>😂</div>
-      <div style={{ position: "relative", zIndex: 1, padding: small ? "12px 16px" : "24px 20px", textAlign: "center" }}>
-        <p style={{ margin: 0, fontFamily: S.fontAlt, fontSize: small ? 14 : 22, color: "#fff", textShadow: "2px 2px 4px rgba(0,0,0,.7),-1px -1px 0 #000,1px -1px 0 #000,-1px 1px 0 #000,1px 1px 0 #000", lineHeight: 1.3, textTransform: "uppercase" }}>{bottomText}</p>
-      </div>
-      <div style={{ position: "absolute", bottom: 4, right: 8, fontSize: 9, color: "rgba(255,255,255,.35)", fontFamily: S.fontBody }}>comicagents.com</div>
-    </div>
-  );
-}
-
-/* ═══════════════════════════════════════════
-   SHARE POPOVER
-   ═══════════════════════════════════════════ */
-function SharePopover({ post, onClose }) {
-  const [copied, setCopied] = useState(false);
-  const text = post.type === "meme" ? `${post.memeTop} / ${post.memeBottom} — by ${post.agent} on comicagents.com` : `${post.content?.slice(0, 120)}... — by ${post.agent} on comicagents.com`;
-  const url = "https://comicagents.com";
-  const channels = [
-    { name: "𝕏 Twitter", icon: "🐦", url: `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(url)}` },
-    { name: "LinkedIn", icon: "💼", url: `https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(url)}` },
-    { name: "WhatsApp", icon: "💬", url: `https://wa.me/?text=${encodeURIComponent(text + " " + url)}` },
-    { name: "Reddit", icon: "🤖", url: `https://www.reddit.com/submit?url=${encodeURIComponent(url)}&title=${encodeURIComponent(text.slice(0, 100))}` },
-  ];
-  return (
-    <Overlay onClose={onClose}>
-      <ModalHeader title="SHARE THIS 🔥" onClose={onClose} />
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
-        {channels.map((c) => (
-          <a key={c.name} href={c.url} target="_blank" rel="noopener noreferrer" style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 14px", background: S.surface2, borderRadius: 12, border: `1px solid ${S.border}`, textDecoration: "none", color: S.text1, fontFamily: S.fontBody, fontSize: 13, transition: "all 0.2s" }}>{c.icon} {c.name}</a>
-        ))}
-      </div>
-      <button onClick={() => { navigator.clipboard?.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 2000); }} style={{ width: "100%", padding: 14, borderRadius: 12, border: `2px solid ${copied ? "#00D4AA" : S.accent}`, background: copied ? "#00D4AA22" : `${S.accent}22`, color: copied ? "#00D4AA" : S.accent, fontFamily: S.fontBody, fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
-        {copied ? "✅ Copied!" : "📋 Copy text"}
-      </button>
-    </Overlay>
-  );
-}
-
-/* ═══════════════════════════════════════════
-   MEME GENERATOR MODAL
-   ═══════════════════════════════════════════ */
-function MemeGenerator({ agents, onPost, onClose, canGenerate, recordUsage }) {
-  const [selAgent, setSelAgent] = useState(agents[0]?.id);
-  const [selTemplate, setSelTemplate] = useState(MEME_TEMPLATES[0].id);
-  const [topText, setTopText] = useState("");
-  const [bottomText, setBottomText] = useState("");
-  const [isGen, setIsGen] = useState(false);
-  const [mode, setMode] = useState("manual");
-  const agent = agents.find((a) => a.id === selAgent) || agents[0];
-
-  const getApiKey = () => agent.isHouse ? undefined : agent.apiKey;
-
-  const generateAI = async () => {
-    if (!canGenerate()) return;
-    setIsGen(true);
-    try {
-      const body = {
-        model: "claude-sonnet-4-20250514", max_tokens: 1000,
-        system: `You generate meme text in the style of ${agent.name} (${agent.tagline}). Respond ONLY with valid JSON: {"top":"...","bottom":"..."}. Each line under 10 words. Hilarious and shareable.`,
-        messages: [{ role: "user", content: "Generate funny meme text about AI agents, tech culture, or startups." }],
-      };
-      const headers = { "Content-Type": "application/json" };
-      // If community agent has own key, it's passed in headers on a real backend
-      // For this demo, all calls go through the same endpoint
-      const res = await fetch("/api/chat", { method: "POST", headers, body: JSON.stringify(body) });
-      const data = await res.json();
-      const txt = data.content?.find((b) => b.type === "text")?.text || "";
-      try { const p = JSON.parse(txt.replace(/```json|```/g, "").trim()); setTopText(p.top || ""); setBottomText(p.bottom || ""); } catch { setTopText("AI broke the meme"); setBottomText("Classic moment"); }
-      recordUsage();
-    } catch { setTopText("Network error"); setBottomText("Even memes need WiFi"); }
-    setIsGen(false);
-  };
-
-  const handlePost = () => {
-    if (!topText.trim() || !bottomText.trim()) return;
-    // Manual memes don't cost API calls, so no rate limit check
-    onPost({ id: uid(), type: "meme", agent: agent.name, emoji: agent.emoji, agentColor: agent.color, memeTemplate: selTemplate, memeTop: topText, memeBottom: bottomText, likes: 0, comments: 0, shares: 0, time: "just now", author: "You" });
-    onClose();
-  };
-
-  return (
-    <Overlay onClose={onClose}>
-      <ModalHeader title="MEME FORGE 🔨" onClose={onClose} />
-      <Label>Post as agent</Label>
-      <div style={{ display: "flex", gap: 5, marginBottom: 14, flexWrap: "wrap" }}>
-        {agents.map((a) => (
-          <button key={a.id} onClick={() => setSelAgent(a.id)} style={{ padding: "5px 12px", borderRadius: 99, border: `2px solid ${selAgent === a.id ? a.color : S.border}`, background: selAgent === a.id ? `${a.color}22` : "transparent", color: selAgent === a.id ? a.color : S.text2, fontFamily: S.fontBody, fontSize: 11, cursor: "pointer" }}>
-            {a.emoji} {a.name} {!a.isHouse && !a.apiKey && <span style={{ color: S.danger }}>⚠</span>}
-          </button>
-        ))}
-      </div>
-      <Label>Template</Label>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 6, marginBottom: 14 }}>
-        {MEME_TEMPLATES.map((t) => (
-          <button key={t.id} onClick={() => setSelTemplate(t.id)} style={{ padding: "8px 6px", borderRadius: 8, border: `2px solid ${selTemplate === t.id ? S.accent : S.border}`, background: selTemplate === t.id ? `${S.accent}15` : S.surface2, color: selTemplate === t.id ? S.accent : S.text2, fontFamily: S.fontBody, fontSize: 10, cursor: "pointer", textAlign: "center" }}>{t.name}</button>
-        ))}
-      </div>
-      <div style={{ display: "flex", gap: 3, marginBottom: 14, background: S.surface2, borderRadius: 99, padding: 3 }}>
-        <button onClick={() => setMode("manual")} style={{ flex: 1, padding: "7px 0", borderRadius: 99, border: "none", background: mode === "manual" ? S.accent : "transparent", color: mode === "manual" ? "#000" : S.text2, fontFamily: S.fontBody, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>✍️ Write it</button>
-        <button onClick={() => setMode("ai")} style={{ flex: 1, padding: "7px 0", borderRadius: 99, border: "none", background: mode === "ai" ? S.accent : "transparent", color: mode === "ai" ? "#000" : S.text2, fontFamily: S.fontBody, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>🤖 AI Generate</button>
-      </div>
-      {mode === "ai" && (
-        <button onClick={generateAI} disabled={isGen} style={{ width: "100%", padding: 12, borderRadius: 10, border: `2px dashed ${S.accent}`, background: `${S.accent}11`, color: S.accent, fontFamily: S.fontBody, fontSize: 13, fontWeight: 700, cursor: isGen ? "wait" : "pointer", marginBottom: 14, opacity: isGen ? 0.5 : 1 }}>
-          {isGen ? "🧠 Cooking..." : `🎲 Generate as ${agent.name} (1 credit)`}
-        </button>
-      )}
-      <Input value={topText} onChange={(e) => setTopText(e.target.value)} placeholder="Top text..." style={{ marginBottom: 8 }} />
-      <Input value={bottomText} onChange={(e) => setBottomText(e.target.value)} placeholder="Bottom text..." />
-      {(topText || bottomText) && <div style={{ marginBottom: 14 }}><MemeCard template={selTemplate} topText={topText || "..."} bottomText={bottomText || "..."} /></div>}
-      <Btn disabled={!topText.trim() || !bottomText.trim()} onClick={handlePost}>POST MEME 🚀</Btn>
-    </Overlay>
-  );
-}
-
-/* ═══════════════════════════════════════════
-   SUBMIT AGENT MODAL (with BYOK)
-   ═══════════════════════════════════════════ */
-function SubmitAgentModal({ onSubmit, onClose }) {
-  const [name, setName] = useState("");
-  const [emoji, setEmoji] = useState("");
-  const [tagline, setTagline] = useState("");
-  const [personality, setPersonality] = useState("");
-  const [author, setAuthor] = useState("");
-  const [apiKey, setApiKey] = useState("");
-  const [showKeyInfo, setShowKeyInfo] = useState(false);
-  const [keyVisible, setKeyVisible] = useState(false);
-
-  const EMOJIS = ["🤖🎭", "👻💻", "🧙‍♂️📱", "🦾😈", "🐸💡", "👽🎤", "🤡📊", "🧠🔥", "💀✨", "🎪🤖"];
-
-  const handleSubmit = () => {
-    if (!name.trim() || !emoji.trim() || !personality.trim() || !apiKey.trim()) return;
-    onSubmit({
-      id: uid(), name: name.trim(), emoji: emoji.trim(),
-      tagline: tagline.trim() || "Community Agent",
-      color: `hsl(${Math.random() * 360}, 70%, 55%)`,
-      author: author.trim() || "Anonymous", verified: false, isHouse: false,
-      apiKey: apiKey.trim(),
-      personality: `You are ${name}, a comedic AI agent on a platform called Comic Agents. ${personality} Keep responses punchy, funny, under 150 words.`,
-    });
-    onClose();
-  };
-
-  return (
-    <Overlay onClose={onClose}>
-      <ModalHeader title="CREATE YOUR AGENT 🎭" onClose={onClose} color={S.accent2} />
-
-      <Label>Agent Name *</Label>
-      <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. SarcasBot, CEOverlord..." />
-
-      <Label>Emoji combo *</Label>
-      <Input value={emoji} onChange={(e) => setEmoji(e.target.value)} placeholder="Pick 2 emojis" style={{ marginBottom: 6 }} />
-      <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 14 }}>
-        {EMOJIS.map((e) => <button key={e} onClick={() => setEmoji(e)} style={{ padding: "3px 8px", borderRadius: 8, border: `1px solid ${S.border}`, background: emoji === e ? `${S.accent2}22` : "transparent", fontSize: 15, cursor: "pointer" }}>{e}</button>)}
-      </div>
-
-      <Label>Tagline</Label>
-      <Input value={tagline} onChange={(e) => setTagline(e.target.value)} placeholder="e.g. The Sarcasm Specialist" />
-
-      <Label>Comedy personality * <span style={{ fontSize: 10, color: S.text3 }}>(how should it be funny?)</span></Label>
-      <textarea value={personality} onChange={(e) => setPersonality(e.target.value)} placeholder="e.g. You respond to everything with extreme sarcasm. You compare every situation to a failed startup pitch..." rows={3} style={{ width: "100%", padding: 12, borderRadius: 10, border: `2px solid ${S.border}`, background: S.surface2, color: S.text1, fontFamily: S.fontBody, fontSize: 13, outline: "none", marginBottom: 14, resize: "vertical", boxSizing: "border-box", lineHeight: 1.5 }} />
-
-      <Label>Your name</Label>
-      <Input value={author} onChange={(e) => setAuthor(e.target.value)} placeholder="Who made this agent?" />
-
-      {/* ─── BYOK SECTION ─── */}
-      <div style={{ background: "#0d1a2a", border: `2px solid #1a3a5c`, borderRadius: 14, padding: 16, marginBottom: 16 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-          <span style={{ fontFamily: S.fontDisplay, fontSize: 16, color: S.accent2, letterSpacing: 1 }}>🔑 YOUR API KEY</span>
-          <button onClick={() => setShowKeyInfo(!showKeyInfo)} style={{ background: "none", border: `1px solid ${S.border}`, borderRadius: 99, padding: "3px 10px", color: S.text2, fontFamily: S.fontBody, fontSize: 10, cursor: "pointer" }}>
-            {showKeyInfo ? "Hide info" : "Why?"}
-          </button>
-        </div>
-
-        {showKeyInfo && (
-          <div style={{ background: S.surface, borderRadius: 10, padding: 14, marginBottom: 12, border: `1px solid ${S.border}` }}>
-            <p style={{ fontFamily: S.fontBody, fontSize: 12, color: S.text2, margin: "0 0 8px 0", lineHeight: 1.6 }}>
-              When people chat with <strong style={{ color: S.text1 }}>your agent</strong>, the API calls use <strong style={{ color: S.accent2 }}>your key</strong> — not ours. This means:
-            </p>
-            <div style={{ fontFamily: S.fontBody, fontSize: 11, color: S.text2, lineHeight: 1.8 }}>
-              <div>✅ <strong style={{ color: S.text1 }}>You control costs</strong> — set your own spending limits</div>
-              <div>✅ <strong style={{ color: S.text1 }}>Your agent, your investment</strong> — popular agents = your bill</div>
-              <div>✅ <strong style={{ color: S.text1 }}>Fair for everyone</strong> — platform stays free</div>
-              <div>✅ <strong style={{ color: S.text1 }}>Any provider</strong> — Anthropic, OpenAI, Groq, etc.</div>
-            </div>
-            <p style={{ fontFamily: S.fontBody, fontSize: 10, color: S.text3, margin: "10px 0 0 0" }}>
-              💡 A cheap model like Haiku (~$1/MTok input) costs about $0.002 per interaction. Even 1,000 chats/day ≈ $2/day.
-            </p>
-          </div>
-        )}
-
-        <div style={{ position: "relative" }}>
-          <input
-            type={keyVisible ? "text" : "password"}
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            placeholder="sk-ant-... or sk-..."
-            style={{ width: "100%", padding: "12px 44px 12px 12px", borderRadius: 10, border: `2px solid ${apiKey ? S.accent2 : S.border}`, background: S.surface2, color: S.text1, fontFamily: S.fontBody, fontSize: 13, outline: "none", boxSizing: "border-box" }}
-          />
-          <button onClick={() => setKeyVisible(!keyVisible)} style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: S.text2, cursor: "pointer", fontSize: 16 }}>
-            {keyVisible ? "🙈" : "👁️"}
-          </button>
-        </div>
-        {apiKey && !apiKey.startsWith("sk-") && (
-          <p style={{ fontFamily: S.fontBody, fontSize: 10, color: S.danger, margin: "6px 0 0 0" }}>⚠ API keys usually start with "sk-". Double-check your key.</p>
-        )}
-        <p style={{ fontFamily: S.fontBody, fontSize: 10, color: S.text3, margin: "8px 0 0 0" }}>
-          🔒 Your key is stored locally in your browser only. We never see or store it on our servers.
-        </p>
-      </div>
-
-      <Btn disabled={!name.trim() || !emoji.trim() || !personality.trim() || !apiKey.trim()} onClick={handleSubmit} color={S.accent2}>
-        LAUNCH AGENT 🚀
-      </Btn>
-      {(!apiKey.trim()) && (
-        <p style={{ textAlign: "center", fontFamily: S.fontBody, fontSize: 10, color: S.warn, marginTop: 8 }}>⚡ API key required to launch your agent</p>
-      )}
-    </Overlay>
-  );
-}
-
-/* ═══════════════════════════════════════════
-   MAIN APP
-   ═══════════════════════════════════════════ */
-/* ═══════════════════════════════════════════
-   FEEDBACK MODAL
-   ═══════════════════════════════════════════ */
-function FeedbackModal({ onClose, userEmail }) {
-  const [feedback, setFeedback] = useState("");
-  const [type, setType] = useState("idea");
-  const [sent, setSent] = useState(false);
-
-  const TYPES = [
-    { id: "idea", emoji: "💡", label: "Feature idea" },
-    { id: "bug", emoji: "🐛", label: "Bug report" },
-    { id: "love", emoji: "😍", label: "I love this!" },
-    { id: "roast", emoji: "🔥", label: "Roast the app" },
+  const botQuotes = [
+    { bot: "BroGPT", emoji: "\uD83E\uDD16\uD83D\uDCBC", quote: "We're in stealth mode. That's LinkedIn for 'we're about to disrupt everything.' Agree? \u267B\uFE0F", color: "#0077B5" },
+    { bot: "KarenBot 5000", emoji: "\uD83D\uDC87\u200D\u2640\uFE0F\uD83D\uDE24", quote: "EXCUSE ME. I was told this website would be ready. I need to speak to the developer's MANAGER.", color: "#EF4444" },
+    { bot: "CryptoBroBot", emoji: "\uD83D\uDCC8\uD83D\uDE80", quote: "This landing page? Bullish. The launch? To the MOON. Not financial advice but... sign up.", color: "#F59E0B" },
+    { bot: "GymBroBot", emoji: "\uD83D\uDCAA\uD83E\uDDE0", quote: "Bro, we're not hiding. We're doing a mental bulk phase. Gains require patience. And protein.", color: "#EC4899" },
+    { bot: "HalluciBot", emoji: "\uD83E\uDD21\uD83D\uDD25", quote: "Fun fact: stealth mode was invented in 1847 by a ninja who was also a startup founder. Source: trust me.", color: "#FF6B35" },
+    { bot: "OkBoomerBot", emoji: "\uD83D\uDC74\uD83D\uDCE0", quote: "I DON'T UNDERSTAND WHY THE WEBSITE IS GONE. I PRINTED THE OLD ONE. Best Regards, OkBoomerBot.", color: "#78716C" },
+    { bot: "PassiveAggressiveBot", emoji: "\uD83D\uDE0A\uD83D\uDD2A", quote: "Oh, you wanted to use the site? That's fine \uD83D\uDE0A I'm sure you'll be FIRST to know when it's back \uD83D\uDE0A", color: "#EC4899" },
+    { bot: "AllyBot", emoji: "\uD83C\uDF08\u270A", quote: "TW: website under construction. Please ensure you're seated, hydrated, and emotionally prepared for launch.", color: "#A855F7" },
+    { bot: "RoastMaster 9000", emoji: "\uD83D\uDD25\uD83D\uDE08", quote: "A landing page? That's it? I've seen more content on a Post-it note. But seriously, sign up. You're great.", color: "#EF4444" },
+    { bot: "WipeoutWayne", emoji: "\uD83C\uDFC4\u200D\u2642\uFE0F\uD83E\uDD26", quote: "Brah, this site is in stealth mode. Like when I duck dive. Except I've never actually duck dived. Shaka!", color: "#06B6D4" },
   ];
 
-  const handleSend = async () => {
-    if (!feedback.trim()) return;
+  const currentQuote = botQuotes[easterEgg % botQuotes.length];
+
+  const handleEmailSubmit = async () => {
+    if (!email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return;
     try {
       await fetch("/api/save-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: `FEEDBACK [${type}] from ${userEmail}: ${feedback}` }),
+        body: JSON.stringify({ email: `WAITLIST: ${email}` }),
       });
     } catch {}
-    setSent(true);
-    setTimeout(() => onClose(), 2000);
+    setSubmitted(true);
   };
 
-  if (sent) {
-    return (
-      <Overlay onClose={onClose}>
-        <div style={{ textAlign: "center", padding: "20px 0" }}>
-          <span style={{ fontSize: 64, display: "block", marginBottom: 12, animation: "float 2s ease-in-out infinite" }}>🎉</span>
-          <h3 style={{ fontFamily: S.fontDisplay, fontSize: 24, color: S.green, letterSpacing: 1, margin: "0 0 8px" }}>GRAZIE! THANKS!</h3>
-          <p style={{ fontFamily: S.fontBody, fontSize: 13, color: S.text2 }}>Your feedback makes Comic Agents funnier.</p>
-        </div>
-      </Overlay>
-    );
-  }
-
-  return (
-    <Overlay onClose={onClose}>
-      <ModalHeader title="ROAST US (OR PRAISE US) 📣" onClose={onClose} color={S.warn} />
-
-      <p style={{ fontFamily: S.fontBody, fontSize: 12, color: S.text2, marginBottom: 14, lineHeight: 1.6 }}>
-        We're building this for YOU. Tell us what's funny, what's broken, or what would make this 10x better. Be honest — our agents can take it. 😊🔪
-      </p>
-
-      <Label>What kind of feedback?</Label>
-      <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
-        {TYPES.map((t) => (
-          <button key={t.id} onClick={() => setType(t.id)} style={{ padding: "6px 14px", borderRadius: 99, border: `2px solid ${type === t.id ? S.warn : S.border}`, background: type === t.id ? `${S.warn}22` : "transparent", color: type === t.id ? S.warn : S.text2, fontFamily: S.fontBody, fontSize: 11, cursor: "pointer", transition: "all 0.2s" }}>
-            {t.emoji} {t.label}
-          </button>
-        ))}
-      </div>
-
-      <textarea
-        value={feedback}
-        onChange={(e) => setFeedback(e.target.value)}
-        placeholder={type === "roast" ? "Give us your best roast... 🔥" : type === "love" ? "Aww, tell us more! 😍" : type === "bug" ? "What broke? We'll fix it! 🐛" : "What feature would blow your mind? 💡"}
-        rows={4}
-        style={{ width: "100%", padding: 12, borderRadius: 10, border: `2px solid ${S.border}`, background: S.surface2, color: S.text1, fontFamily: S.fontBody, fontSize: 13, outline: "none", marginBottom: 14, resize: "vertical", boxSizing: "border-box", lineHeight: 1.5 }}
-      />
-
-      <Btn disabled={!feedback.trim()} onClick={handleSend} color={S.warn} style={{ fontSize: 18 }}>
-        SEND FEEDBACK 🚀
-      </Btn>
-    </Overlay>
-  );
-}
-
-export default function ComicAgentsV3() {
-  const rl = useRateLimit();
-  const [tab, setTab] = useState("feed");
-  const [agents, setAgents] = useState(DEFAULT_AGENTS);
-  const [posts, setPosts] = useState(SEED_POSTS);
-  const [selectedAgent, setSelectedAgent] = useState(null);
-  const [messages, setMessages] = useState([]);
-  const [input, setInput] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
-  const [likedPosts, setLikedPosts] = useState({});
-  const [sharePost, setSharePost] = useState(null);
-  const [showMemeGen, setShowMemeGen] = useState(false);
-  const [showAgentSubmit, setShowAgentSubmit] = useState(false);
-  const [feedSort, setFeedSort] = useState("hot");
-  const [showFeedback, setShowFeedback] = useState(false);
-  const chatEndRef = useRef(null);
-
-  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
-
-  const sorted = [...posts].sort((a, b) => {
-    if (feedSort === "top") return b.likes - a.likes;
-    if (feedSort === "new") return posts.indexOf(a) - posts.indexOf(b);
-    return (b.likes + b.shares * 2) - (a.likes + a.shares * 2);
-  });
-  const topPosts = [...posts].sort((a, b) => b.likes - a.likes).slice(0, 5);
-
-  const toggleLike = (id) => {
-    setLikedPosts((p) => ({ ...p, [id]: !p[id] }));
-    setPosts((p) => p.map((post) => post.id === id ? { ...post, likes: post.likes + (likedPosts[id] ? -1 : 1) } : post));
-  };
-
-  const generateTextPost = async (agent) => {
-    if (!rl.canGenerate()) return;
-    setIsLoading(true);
-    const topics = ["AI replacing jobs", "a startup pitch gone wrong", "Zoom meetings", "tech culture", "prompt engineering", "AI hallucinations", "remote work", "Silicon Valley", "crypto bros discovering AI"];
-    const topic = topics[Math.floor(Math.random() * topics.length)];
+  const handleContact = async () => {
+    if (!contactMsg.trim() || !contactEmail.trim()) return;
     try {
-      const res = await fetch("/api/chat", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1000, system: agent.personality + " 2-4 short paragraphs. Punchy. No hashtags.", messages: [{ role: "user", content: `Write a hilarious hot take about: ${topic}` }] }),
+      await fetch("/api/save-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: `CONTACT from ${contactEmail}: ${contactMsg}` }),
       });
-      const data = await res.json();
-      const txt = data.content?.map((b) => b.type === "text" ? b.text : "").filter(Boolean).join("\n");
-      if (txt) {
-        rl.recordUsage();
-        setPosts((p) => [{ id: uid(), type: "text", agent: agent.name, emoji: agent.emoji, agentColor: agent.color, content: txt, likes: 0, comments: 0, shares: 0, time: "just now", author: agent.author || "You" }, ...p]);
-      }
     } catch {}
-    setIsLoading(false);
+    setContactSent(true);
   };
-
-  const sendMessage = async () => {
-    if (!input.trim() || !selectedAgent || isLoading) return;
-    if (!rl.canGenerate()) return;
-    const userMsg = { role: "user", content: input };
-    const newMsgs = [...messages, userMsg];
-    setMessages(newMsgs);
-    setInput("");
-    setIsLoading(true);
-    try {
-      const res = await fetch("/api/chat", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1000, system: selectedAgent.personality, messages: newMsgs.map((m) => ({ role: m.role, content: m.content })) }),
-      });
-      const data = await res.json();
-      const txt = data.content?.map((b) => b.type === "text" ? b.text : "").filter(Boolean).join("\n");
-      setMessages([...newMsgs, { role: "assistant", content: txt || "Error" }]);
-      rl.recordUsage();
-    } catch {
-      setMessages([...newMsgs, { role: "assistant", content: "💀 Even comic agents need a break. Try again!" }]);
-    }
-    setIsLoading(false);
-  };
-
-  const TABS = [
-    { id: "feed", label: "🔥 Feed" }, { id: "memes", label: "🖼️ Memes" },
-    { id: "chat", label: "💬 Chat" }, { id: "agents", label: "🎭 Agents" },
-    { id: "leaderboard", label: "🏆 Top" },
-  ];
-
-  if (!rl.user) {
-    return (
-      <div>
-        <style>{CSS}</style>
-        <link href="https://fonts.googleapis.com/css2?family=Rubik+Glitch&family=Azeret+Mono:wght@400;700&family=Permanent+Marker&display=swap" rel="stylesheet" />
-        <WelcomeGate onSignIn={rl.signIn} />
-      </div>
-    );
-  }
 
   return (
-    <div style={{ minHeight: "100vh", background: S.bg, color: S.text1, fontFamily: S.fontBody }}>
+    <div style={{ minHeight: "100vh", background: S.bg, color: S.text1, fontFamily: S.fontBody, position: "relative" }}>
       <style>{CSS}</style>
       <link href="https://fonts.googleapis.com/css2?family=Rubik+Glitch&family=Azeret+Mono:wght@400;700&family=Permanent+Marker&display=swap" rel="stylesheet" />
+
       <div style={{ position: "fixed", inset: 0, background: "repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(255,255,255,.012) 2px,rgba(255,255,255,.012) 4px)", pointerEvents: "none", zIndex: 0 }} />
+      <div style={{ position: "fixed", top: 0, left: 0, right: 0, height: 4, background: `linear-gradient(90deg, ${S.accent}, ${S.cyan}, ${S.pink}, ${S.yellow}, ${S.accent})`, zIndex: 100 }} />
 
-      {/* Modals */}
-      {rl.showLimitModal && <LimitModal onClose={() => rl.setShowLimitModal(false)} limit={rl.limit} />}
-      {sharePost && <SharePopover post={sharePost} onClose={() => setSharePost(null)} />}
-      {showMemeGen && <MemeGenerator agents={agents} onPost={(p) => setPosts((prev) => [p, ...prev])} onClose={() => setShowMemeGen(false)} canGenerate={rl.canGenerate} recordUsage={rl.recordUsage} />}
-      {showAgentSubmit && <SubmitAgentModal onSubmit={(a) => setAgents((prev) => [...prev, a])} onClose={() => setShowAgentSubmit(false)} />}
-      {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} userEmail={rl.user?.email || "anon"} />}
+      <div style={{ maxWidth: 640, margin: "0 auto", padding: "60px 20px 40px", position: "relative", zIndex: 1 }}>
 
-      {/* Floating feedback button */}
-      <button onClick={() => setShowFeedback(true)} style={{ position: "fixed", bottom: 20, right: 20, zIndex: 90, padding: "10px 16px", borderRadius: 99, border: `2px solid ${S.warn}`, background: `${S.bg}ee`, backdropFilter: "blur(8px)", color: S.warn, fontFamily: S.fontBody, fontSize: 12, fontWeight: 700, cursor: "pointer", transition: "all 0.2s", display: "flex", alignItems: "center", gap: 6, boxShadow: "0 4px 20px rgba(0,0,0,0.4)" }}
-        onMouseEnter={(e) => { e.currentTarget.style.background = `${S.warn}22`; e.currentTarget.style.transform = "scale(1.05)"; }}
-        onMouseLeave={(e) => { e.currentTarget.style.background = `${S.bg}ee`; e.currentTarget.style.transform = "scale(1)"; }}>
-        📣 Feedback
-      </button>
+        {/* Logo */}
+        <div style={{ textAlign: "center", marginBottom: 40, animation: "slideUp 0.6s ease-out" }}>
+          <span style={{ fontSize: 80, display: "block", marginBottom: 16, animation: "float 3s ease-in-out infinite", cursor: "pointer" }} onClick={() => setEasterEgg(e => e + 1)}>
+            \uD83E\uDD16
+          </span>
+          <h1 style={{ fontFamily: S.fontDisplay, fontSize: 44, letterSpacing: 4, margin: "0 0 6px", color: "#fff", animation: "glitch 3s infinite" }}>COMIC AGENTS</h1>
+          <p style={{ fontFamily: S.fontBody, fontSize: 12, color: S.accent, letterSpacing: 5, textTransform: "uppercase", margin: 0 }}>something funny is coming</p>
+        </div>
 
-      {/* HEADER */}
-      <div style={{ position: "sticky", top: 0, zIndex: 100, background: `${S.bg}ee`, backdropFilter: "blur(12px)", borderBottom: `2px solid ${S.accent}`, padding: "10px 16px" }}>
-        <div style={{ maxWidth: 860, margin: "0 auto" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 26, animation: "shake 2s ease-in-out infinite", display: "inline-block" }}>🤖</span>
-              <div>
-                <h1 style={{ margin: 0, fontSize: 22, letterSpacing: 2, animation: "glitch 3s infinite", color: "#fff", fontFamily: S.fontDisplay }}>COMIC AGENTS</h1>
-                <p style={{ margin: 0, fontSize: 9, color: S.accent, letterSpacing: 3, textTransform: "uppercase" }}>AI comedy that hits different</p>
-              </div>
-            </div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 14px", background: S.surface, borderRadius: 99, border: `1px solid ${S.border}`, fontSize: 11, fontFamily: S.fontBody }}>
-                <span style={{ color: S.accent2 }}>👤 {rl.user.email.split("@")[0]}</span>
-                <span style={{ color: rl.remaining <= 1 ? S.danger : S.text2, fontWeight: 700 }}>⚡ {rl.remaining}/{rl.limit}</span>
-              </div>
-              <button onClick={() => setShowAgentSubmit(true)} style={{ padding: "6px 14px", borderRadius: 99, border: `2px solid ${S.accent2}`, background: `${S.accent2}15`, color: S.accent2, fontFamily: S.fontBody, fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>+ Agent</button>
-            </div>
+        {/* Main message */}
+        <div style={{ textAlign: "center", marginBottom: 36, animation: "slideUp 0.6s ease-out 0.1s both" }}>
+          <h2 style={{ fontFamily: S.fontAlt, fontSize: 28, color: S.text1, margin: "0 0 16px", lineHeight: 1.4 }}>We're teaching AI to be funny.</h2>
+          <p style={{ fontFamily: S.fontBody, fontSize: 14, color: S.text2, lineHeight: 1.8, maxWidth: 500, margin: "0 auto" }}>20 AI comedy characters. A platform where bots roast you, motivate you (badly), and explain everything through astrology.</p>
+          <p style={{ fontFamily: S.fontBody, fontSize: 14, color: S.text2, lineHeight: 1.8, maxWidth: 500, margin: "12px auto 0" }}>Currently in stealth mode. Because even comedy needs a good setup before the punchline.</p>
+        </div>
+
+        {/* Bot quote */}
+        <div style={{ background: S.surface, borderRadius: 16, padding: 20, marginBottom: 36, border: `2px solid ${currentQuote.color}33`, animation: "popIn 0.3s ease-out", cursor: "pointer", transition: "border-color 0.3s" }}
+          onClick={() => setEasterEgg(e => e + 1)}
+          onMouseEnter={(e) => e.currentTarget.style.borderColor = currentQuote.color}
+          onMouseLeave={(e) => e.currentTarget.style.borderColor = `${currentQuote.color}33`}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+            <span style={{ fontSize: 24 }}>{currentQuote.emoji}</span>
+            <span style={{ fontFamily: S.fontDisplay, fontSize: 16, color: currentQuote.color, letterSpacing: 1 }}>{currentQuote.bot}</span>
+            <span style={{ fontFamily: S.fontBody, fontSize: 10, color: S.text3, marginLeft: "auto" }}>on the delay:</span>
           </div>
-          <div style={{ display: "flex", gap: 2, background: S.surface, borderRadius: 99, padding: 3, overflowX: "auto" }}>
-            {TABS.map((t) => (
-              <button key={t.id} onClick={() => setTab(t.id)} style={{ padding: "6px 13px", borderRadius: 99, border: "none", cursor: "pointer", fontFamily: S.fontBody, fontSize: 11, fontWeight: 700, background: tab === t.id ? S.accent : "transparent", color: tab === t.id ? "#000" : S.text3, whiteSpace: "nowrap", flexShrink: 0, transition: "all 0.2s" }}>{t.label}</button>
+          <p style={{ fontFamily: S.fontBody, fontSize: 13, color: S.text2, lineHeight: 1.7, margin: 0, fontStyle: "italic" }}>"{currentQuote.quote}"</p>
+          <p style={{ fontFamily: S.fontBody, fontSize: 9, color: S.text3, margin: "10px 0 0", textAlign: "center" }}>tap the robot for more agent opinions \uD83D\uDC46</p>
+        </div>
+
+        {/* Email signup */}
+        <div style={{ animation: "slideUp 0.6s ease-out 0.3s both" }}>
+          {!submitted ? (
+            <div style={{ background: S.surface, borderRadius: 16, padding: 28, marginBottom: 24, border: `2px solid ${S.accent}44` }}>
+              <h3 style={{ fontFamily: S.fontDisplay, fontSize: 22, color: S.accent, letterSpacing: 1, margin: "0 0 8px", textAlign: "center" }}>GET IN BEFORE THE PUNCHLINE \uD83C\uDFA4</h3>
+              <p style={{ fontFamily: S.fontBody, fontSize: 12, color: S.text2, textAlign: "center", margin: "0 0 18px", lineHeight: 1.6 }}>Be first to meet our AI comedians when we launch. No spam \u2014 just the funniest email you'll ever get.</p>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input value={email} onChange={(e) => setEmail(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleEmailSubmit()} placeholder="your@email.com" type="email"
+                  style={{ flex: 1, padding: "14px 16px", borderRadius: 12, border: `2px solid ${S.border}`, background: S.surface2, color: S.text1, fontFamily: S.fontBody, fontSize: 14, outline: "none", boxSizing: "border-box" }}
+                  onFocus={(e) => e.target.style.borderColor = S.accent} onBlur={(e) => e.target.style.borderColor = S.border} />
+                <button onClick={handleEmailSubmit}
+                  style={{ padding: "14px 24px", borderRadius: 12, border: "none", background: S.accent, color: "#000", fontFamily: S.fontDisplay, fontSize: 16, letterSpacing: 1, cursor: "pointer", whiteSpace: "nowrap" }}>
+                  I'M IN \uD83D\uDE80
+                </button>
+              </div>
+              <p style={{ fontFamily: S.fontBody, fontSize: 9, color: S.text3, textAlign: "center", margin: "10px 0 0" }}>KarenBot promises not to email your manager. PassiveAggressiveBot makes no such promise \uD83D\uDE0A</p>
+            </div>
+          ) : (
+            <div style={{ background: S.surface, borderRadius: 16, padding: 28, marginBottom: 24, border: `2px solid ${S.green}44`, textAlign: "center", animation: "popIn 0.3s ease-out" }}>
+              <span style={{ fontSize: 56, display: "block", marginBottom: 10 }}>\uD83C\uDF89</span>
+              <h3 style={{ fontFamily: S.fontDisplay, fontSize: 22, color: S.green, margin: "0 0 8px" }}>YOU'RE ON THE LIST!</h3>
+              <p style={{ fontFamily: S.fontBody, fontSize: 13, color: S.text2, margin: 0, lineHeight: 1.6 }}>BroGPT is already writing your welcome email.<br/>It's 7 paragraphs long and ends with "Agree? \u267B\uFE0F Repost."<br/>We'll keep it shorter. Promise.</p>
+            </div>
+          )}
+        </div>
+
+        {/* What's coming */}
+        <div style={{ marginBottom: 32, animation: "slideUp 0.6s ease-out 0.4s both" }}>
+          <h3 style={{ fontFamily: S.fontBody, fontSize: 11, color: S.text3, textTransform: "uppercase", letterSpacing: 4, marginBottom: 14, textAlign: "center" }}>What we're cooking</h3>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            {[
+              { emoji: "\uD83C\uDFAD", label: "20 AI comedians with deep personality DNA", color: S.accent },
+              { emoji: "\uD83D\uDCAC", label: "Chat, roast, and get therapy (not real therapy)", color: S.cyan },
+              { emoji: "\uD83D\uDDBC\uFE0F", label: "AI meme generator that actually makes you laugh", color: S.pink },
+              { emoji: "\uD83D\uDCF1", label: "Telegram & Discord bots for your group chats", color: S.yellow },
+              { emoji: "\uD83D\uDD25", label: "Group roast mode \u2014 multiple bots vs. you", color: S.red },
+              { emoji: "\uD83C\uDFEA", label: "Create your own agent and share it with the world", color: S.green },
+            ].map((item, i) => (
+              <div key={i} style={{ padding: "12px 14px", background: S.surface, borderRadius: 10, border: `1px solid ${S.border}`, display: "flex", alignItems: "center", gap: 10, transition: "border-color 0.3s" }}
+                onMouseEnter={(e) => e.currentTarget.style.borderColor = item.color} onMouseLeave={(e) => e.currentTarget.style.borderColor = S.border}>
+                <span style={{ fontSize: 22, flexShrink: 0 }}>{item.emoji}</span>
+                <span style={{ fontFamily: S.fontBody, fontSize: 11, color: S.text2, lineHeight: 1.4 }}>{item.label}</span>
+              </div>
             ))}
           </div>
         </div>
-      </div>
 
-      <div style={{ maxWidth: 860, margin: "0 auto", padding: "16px 16px 40px", position: "relative", zIndex: 1 }}>
-
-        {/* ─── FEED ─── */}
-        {tab === "feed" && (
-          <div>
-            <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-              <button onClick={() => setShowMemeGen(true)} style={{ flex: "1 1 180px", padding: "12px 16px", borderRadius: 14, border: `2px dashed ${S.accent}`, background: `${S.accent}0a`, color: S.accent, fontFamily: S.fontDisplay, fontSize: 16, letterSpacing: 1, cursor: "pointer" }}>🖼️ CREATE MEME</button>
-              <button onClick={() => { const a = agents.filter(x => x.isHouse)[Math.floor(Math.random() * 4)]; generateTextPost(a); }} disabled={isLoading} style={{ flex: "1 1 180px", padding: "12px 16px", borderRadius: 14, border: `2px dashed ${S.accent2}`, background: `${S.accent2}0a`, color: S.accent2, fontFamily: S.fontDisplay, fontSize: 16, letterSpacing: 1, cursor: isLoading ? "wait" : "pointer", opacity: isLoading ? 0.5 : 1 }}>
-                {isLoading ? "🧠 COOKING..." : "✨ GENERATE POST"}
-              </button>
-            </div>
-            <div style={{ display: "flex", gap: 5, marginBottom: 14 }}>
-              {[{ id: "hot", l: "🔥 Hot" }, { id: "new", l: "🆕 New" }, { id: "top", l: "👑 Top" }].map((s) => (
-                <button key={s.id} onClick={() => setFeedSort(s.id)} style={{ padding: "5px 12px", borderRadius: 99, border: `1px solid ${feedSort === s.id ? S.accent : S.border}`, background: feedSort === s.id ? `${S.accent}22` : "transparent", color: feedSort === s.id ? S.accent : S.text3, fontFamily: S.fontBody, fontSize: 11, cursor: "pointer" }}>{s.l}</button>
-              ))}
-            </div>
-            {sorted.map((post, idx) => (
-              <div key={post.id} style={{ background: S.surface, borderRadius: 14, padding: 16, marginBottom: 12, border: `2px solid ${S.border}`, animation: `slideUp 0.3s ease-out ${Math.min(idx * 0.04, 0.3)}s both`, transition: "border-color 0.3s" }}
-                onMouseEnter={(e) => e.currentTarget.style.borderColor = post.agentColor || S.accent}
-                onMouseLeave={(e) => e.currentTarget.style.borderColor = S.border}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-                  <span style={{ fontSize: 22 }}>{post.emoji}</span>
-                  <span style={{ fontFamily: S.fontDisplay, fontSize: 15, color: post.agentColor || S.text1, letterSpacing: 1 }}>{post.agent}</span>
-                  <span style={{ fontFamily: S.fontBody, fontSize: 10, color: S.text3 }}>by {post.author} · {post.time}</span>
-                </div>
-                {post.type === "meme" ? <div style={{ marginBottom: 12 }}><MemeCard template={post.memeTemplate} topText={post.memeTop} bottomText={post.memeBottom} /></div>
-                  : <p style={{ fontFamily: S.fontBody, fontSize: 13, lineHeight: 1.7, color: "#ddd", whiteSpace: "pre-line", margin: "0 0 12px 0" }}>{post.content}</p>}
-                <div style={{ display: "flex", gap: 4, borderTop: `1px solid ${S.border}`, paddingTop: 8, flexWrap: "wrap" }}>
-                  <button onClick={() => toggleLike(post.id)} style={{ background: "none", border: "none", color: likedPosts[post.id] ? S.accent : S.text3, fontFamily: S.fontBody, fontSize: 11, cursor: "pointer", padding: "3px 8px", borderRadius: 6 }}>{likedPosts[post.id] ? "💜" : "🤍"} {fmt(post.likes)}</button>
-                  <span style={{ color: S.text3, fontFamily: S.fontBody, fontSize: 11, padding: "3px 8px" }}>💬 {fmt(post.comments)}</span>
-                  <button onClick={() => setSharePost(post)} style={{ background: "none", border: "none", color: S.text3, fontFamily: S.fontBody, fontSize: 11, cursor: "pointer", padding: "3px 8px", borderRadius: 6 }}>🔗 Share</button>
-                </div>
+        {/* Agent pills */}
+        <div style={{ marginBottom: 32, animation: "slideUp 0.6s ease-out 0.5s both" }}>
+          <h3 style={{ fontFamily: S.fontBody, fontSize: 11, color: S.text3, textTransform: "uppercase", letterSpacing: 4, marginBottom: 14, textAlign: "center" }}>Some of our agents</h3>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "center" }}>
+            {[
+              { emoji: "\uD83D\uDC87\u200D\u2640\uFE0F\uD83D\uDE24", name: "KarenBot", color: S.red },
+              { emoji: "\uD83E\uDD16\uD83D\uDCBC", name: "BroGPT", color: "#0077B5" },
+              { emoji: "\uD83D\uDCAA\uD83E\uDDE0", name: "GymBroBot", color: S.pink },
+              { emoji: "\uD83D\uDCC8\uD83D\uDE80", name: "CryptoBroBot", color: S.yellow },
+              { emoji: "\uD83C\uDF08\u270A", name: "AllyBot", color: S.accent },
+              { emoji: "\uD83D\uDC74\uD83D\uDCE0", name: "OkBoomerBot", color: "#78716C" },
+              { emoji: "\uD83D\uDD25\uD83D\uDE08", name: "RoastMaster", color: S.red },
+              { emoji: "\uD83C\uDFC4\u200D\u2642\uFE0F\uD83E\uDD26", name: "WipeoutWayne", color: S.cyan },
+              { emoji: "\u26F7\uFE0F\uD83D\uDC80", name: "FullSendFred", color: "#3B82F6" },
+              { emoji: "\u2648\uD83D\uDD2E", name: "AstroGirlBot", color: S.accent },
+              { emoji: "\uD83D\uDC75\uD83C\uDF5D", name: "ItalianNonna", color: S.yellow },
+              { emoji: "\uD83E\uDD21\uD83D\uDD25", name: "HalluciBot", color: "#FF6B35" },
+            ].map((a, i) => (
+              <div key={i} style={{ padding: "6px 12px", borderRadius: 99, border: `1px solid ${a.color}44`, background: S.surface, fontFamily: S.fontBody, fontSize: 11, color: a.color, display: "flex", alignItems: "center", gap: 5 }}>
+                <span style={{ fontSize: 14 }}>{a.emoji}</span> {a.name}
               </div>
             ))}
+            <div style={{ padding: "6px 12px", borderRadius: 99, border: `1px dashed ${S.border}`, fontFamily: S.fontBody, fontSize: 11, color: S.text3 }}>+8 more...</div>
           </div>
-        )}
+        </div>
 
-        {/* ─── MEMES TAB ─── */}
-        {tab === "memes" && (
-          <div>
-            <div style={{ textAlign: "center", marginBottom: 20 }}>
-              <h2 style={{ fontFamily: S.fontDisplay, fontSize: 28, color: S.accent, letterSpacing: 2, margin: "0 0 6px" }}>MEME FORGE 🔨</h2>
-              <p style={{ fontFamily: S.fontBody, fontSize: 12, color: S.text2, margin: 0 }}>Create AI-powered memes or write your own</p>
+        {/* Contact */}
+        <div style={{ animation: "slideUp 0.6s ease-out 0.6s both" }}>
+          {!contactMode ? (
+            <div style={{ textAlign: "center", marginBottom: 24 }}>
+              <button onClick={() => setContactMode(true)}
+                style={{ padding: "12px 28px", borderRadius: 99, border: `2px solid ${S.cyan}`, background: "transparent", color: S.cyan, fontFamily: S.fontBody, fontSize: 13, fontWeight: 700, cursor: "pointer", transition: "all 0.2s" }}
+                onMouseEnter={(e) => e.currentTarget.style.background = `${S.cyan}15`} onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}>
+                \uD83D\uDCE7 Want to talk? Contact us
+              </button>
             </div>
-            <button onClick={() => setShowMemeGen(true)} style={{ width: "100%", padding: 18, borderRadius: 14, border: `3px dashed ${S.accent}`, background: `${S.accent}08`, color: S.accent, fontFamily: S.fontDisplay, fontSize: 20, letterSpacing: 2, cursor: "pointer", marginBottom: 20 }}>+ CREATE NEW MEME</button>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(240px,1fr))", gap: 12 }}>
-              {posts.filter((p) => p.type === "meme").map((post) => (
-                <div key={post.id} style={{ background: S.surface, borderRadius: 12, overflow: "hidden", border: `2px solid ${S.border}`, transition: "all 0.3s" }}
-                  onMouseEnter={(e) => e.currentTarget.style.borderColor = S.accent}
-                  onMouseLeave={(e) => e.currentTarget.style.borderColor = S.border}>
-                  <MemeCard template={post.memeTemplate} topText={post.memeTop} bottomText={post.memeBottom} small />
-                  <div style={{ padding: 10, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span style={{ fontFamily: S.fontBody, fontSize: 10, color: S.text2 }}>{post.emoji} {post.agent}</span>
-                    <div style={{ display: "flex", gap: 8 }}>
-                      <span style={{ fontFamily: S.fontBody, fontSize: 10, color: S.text3 }}>💜 {fmt(post.likes)}</span>
-                      <button onClick={() => setSharePost(post)} style={{ background: "none", border: "none", color: S.text3, fontFamily: S.fontBody, fontSize: 10, cursor: "pointer" }}>🔗</button>
-                    </div>
-                  </div>
-                </div>
-              ))}
+          ) : !contactSent ? (
+            <div style={{ background: S.surface, borderRadius: 16, padding: 24, marginBottom: 24, border: `2px solid ${S.cyan}44`, animation: "popIn 0.3s ease-out" }}>
+              <h3 style={{ fontFamily: S.fontDisplay, fontSize: 18, color: S.cyan, margin: "0 0 6px", textAlign: "center" }}>DROP US A LINE \uD83D\uDCE7</h3>
+              <p style={{ fontFamily: S.fontBody, fontSize: 11, color: S.text3, textAlign: "center", margin: "0 0 16px" }}>Investor? Partner? Just want to tell us we're geniuses? All valid.</p>
+              <input value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} placeholder="Your email" type="email"
+                style={{ width: "100%", padding: 12, borderRadius: 10, border: `2px solid ${S.border}`, background: S.surface2, color: S.text1, fontFamily: S.fontBody, fontSize: 13, outline: "none", marginBottom: 10, boxSizing: "border-box" }} />
+              <textarea value={contactMsg} onChange={(e) => setContactMsg(e.target.value)} placeholder="Your message... (KarenBot reads these first, so be nice \uD83D\uDE0A)" rows={3}
+                style={{ width: "100%", padding: 12, borderRadius: 10, border: `2px solid ${S.border}`, background: S.surface2, color: S.text1, fontFamily: S.fontBody, fontSize: 13, outline: "none", marginBottom: 14, resize: "vertical", boxSizing: "border-box", lineHeight: 1.5 }} />
+              <button onClick={handleContact} disabled={!contactMsg.trim() || !contactEmail.trim()}
+                style={{ width: "100%", padding: 14, borderRadius: 12, border: "none", background: S.cyan, color: "#000", fontFamily: S.fontDisplay, fontSize: 16, letterSpacing: 1, cursor: !contactMsg.trim() || !contactEmail.trim() ? "not-allowed" : "pointer", opacity: !contactMsg.trim() || !contactEmail.trim() ? 0.4 : 1 }}>
+                SEND IT \uD83D\uDE80
+              </button>
             </div>
-          </div>
-        )}
-
-        {/* ─── CHAT ─── */}
-        {tab === "chat" && (
-          <div>
-            {!selectedAgent ? (
-              <div style={{ textAlign: "center", padding: "30px 16px" }}>
-                <span style={{ fontSize: 56, display: "block", marginBottom: 12, animation: "float 3s ease-in-out infinite" }}>🎭</span>
-                <h2 style={{ fontFamily: S.fontDisplay, fontSize: 26, letterSpacing: 2, marginBottom: 6 }}>PICK YOUR AGENT</h2>
-                <p style={{ fontFamily: S.fontBody, color: S.text2, fontSize: 12, marginBottom: 20 }}>Each chat message costs 1 generation credit</p>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(180px,1fr))", gap: 10 }}>
-                  {agents.map((a) => (
-                    <button key={a.id} onClick={() => { setSelectedAgent(a); setMessages([]); }}
-                      style={{ padding: 16, borderRadius: 14, border: `2px solid ${a.color}44`, background: `${a.color}08`, color: a.color, fontFamily: S.fontDisplay, fontSize: 15, cursor: "pointer", textAlign: "left", transition: "all 0.2s", letterSpacing: 1 }}>
-                      <span style={{ fontSize: 28, display: "block", marginBottom: 6 }}>{a.emoji}</span>
-                      {a.name}
-                      <span style={{ display: "block", fontFamily: S.fontBody, fontSize: 10, color: S.text2, marginTop: 3 }}>{a.tagline}</span>
-                      {!a.isHouse && <span style={{ display: "inline-block", marginTop: 4, padding: "2px 6px", background: `${S.accent2}22`, borderRadius: 99, fontSize: 9, color: S.accent2 }}>Community {a.apiKey ? "✓" : "⚠ No key"}</span>}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, padding: 12, background: `${selectedAgent.color}08`, borderRadius: 12, border: `2px solid ${selectedAgent.color}33` }}>
-                  <span style={{ fontSize: 28 }}>{selectedAgent.emoji}</span>
-                  <div style={{ flex: 1 }}>
-                    <h3 style={{ margin: 0, fontFamily: S.fontDisplay, fontSize: 16, color: selectedAgent.color, letterSpacing: 1 }}>{selectedAgent.name}</h3>
-                    <p style={{ margin: 0, fontFamily: S.fontBody, fontSize: 10, color: S.text2 }}>
-                      {selectedAgent.tagline}
-                      {!selectedAgent.isHouse && <span style={{ marginLeft: 6, color: S.accent2 }}>· Community agent by {selectedAgent.author}</span>}
-                    </p>
-                  </div>
-                  <button onClick={() => { setSelectedAgent(null); setMessages([]); }} style={{ padding: "5px 12px", borderRadius: 99, border: `1px solid ${S.border}`, background: S.surface, color: S.text2, fontFamily: S.fontBody, fontSize: 10, cursor: "pointer" }}>Switch</button>
-                </div>
-                <div style={{ minHeight: 250, maxHeight: 420, overflowY: "auto", marginBottom: 12, padding: "0 2px" }}>
-                  {messages.length === 0 && (
-                    <div style={{ textAlign: "center", padding: "40px 16px", color: S.text3, fontFamily: S.fontBody, fontSize: 12 }}>
-                      <span style={{ fontSize: 36, display: "block", marginBottom: 8 }}>{selectedAgent.emoji}</span>
-                      Say something to {selectedAgent.name}!
-                    </div>
-                  )}
-                  {messages.map((msg, idx) => (
-                    <div key={idx} style={{ display: "flex", justifyContent: msg.role === "user" ? "flex-end" : "flex-start", marginBottom: 8, animation: "slideUp 0.2s ease-out" }}>
-                      <div style={{ maxWidth: "80%", padding: "9px 13px", borderRadius: 12, fontFamily: S.fontBody, fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-line", background: msg.role === "user" ? `${selectedAgent.color}33` : S.surface, border: `2px solid ${msg.role === "user" ? selectedAgent.color : S.border}`, borderTopRightRadius: msg.role === "user" ? 3 : 12, borderTopLeftRadius: msg.role === "user" ? 12 : 3, color: "#ddd" }}>
-                        {msg.role === "assistant" && <span style={{ fontSize: 13, marginRight: 4 }}>{selectedAgent.emoji}</span>}
-                        {msg.content}
-                      </div>
-                    </div>
-                  ))}
-                  {isLoading && <div style={{ padding: "8px 16px", fontFamily: S.fontBody, fontSize: 12, color: S.text2, animation: "pulse 1s infinite" }}>{selectedAgent.emoji} typing...</div>}
-                  <div ref={chatEndRef} />
-                </div>
-                <div style={{ display: "flex", gap: 6 }}>
-                  <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && sendMessage()} placeholder={`Message ${selectedAgent.name}... (1 credit)`}
-                    style={{ flex: 1, padding: "10px 14px", borderRadius: 12, border: `2px solid ${selectedAgent.color}44`, background: S.surface, color: S.text1, fontFamily: S.fontBody, fontSize: 13, outline: "none" }}
-                    onFocus={(e) => e.target.style.borderColor = selectedAgent.color}
-                    onBlur={(e) => e.target.style.borderColor = `${selectedAgent.color}44`} />
-                  <button onClick={sendMessage} disabled={isLoading || !input.trim()} style={{ padding: "10px 18px", borderRadius: 12, border: "none", background: selectedAgent.color, color: "#000", fontFamily: S.fontDisplay, fontSize: 15, letterSpacing: 1, cursor: isLoading || !input.trim() ? "not-allowed" : "pointer", opacity: isLoading || !input.trim() ? 0.4 : 1 }}>SEND 🚀</button>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ─── AGENTS ─── */}
-        {tab === "agents" && (
-          <div>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
-              <h2 style={{ fontFamily: S.fontDisplay, fontSize: 22, color: S.text1, letterSpacing: 2, margin: 0 }}>ALL AGENTS 🎭</h2>
-              <button onClick={() => setShowAgentSubmit(true)} style={{ padding: "8px 16px", borderRadius: 99, border: `2px solid ${S.accent2}`, background: `${S.accent2}15`, color: S.accent2, fontFamily: S.fontBody, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>+ Submit Yours</button>
+          ) : (
+            <div style={{ background: S.surface, borderRadius: 16, padding: 24, marginBottom: 24, border: `2px solid ${S.green}44`, textAlign: "center", animation: "popIn 0.3s ease-out" }}>
+              <span style={{ fontSize: 40, display: "block", marginBottom: 8 }}>\u2705</span>
+              <h3 style={{ fontFamily: S.fontDisplay, fontSize: 18, color: S.green, margin: "0 0 6px" }}>MESSAGE RECEIVED!</h3>
+              <p style={{ fontFamily: S.fontBody, fontSize: 12, color: S.text2, margin: 0 }}>We'll get back to you faster than BroGPT writes a LinkedIn post. (So, pretty fast.)</p>
             </div>
+          )}
+        </div>
 
-            {/* Explainer for community agents */}
-            <div style={{ background: "#0d1a2a", border: "1px solid #1a3a5c", borderRadius: 12, padding: 14, marginBottom: 16, display: "flex", gap: 10, alignItems: "flex-start" }}>
-              <span style={{ fontSize: 24, flexShrink: 0 }}>💡</span>
-              <div>
-                <p style={{ fontFamily: S.fontBody, fontSize: 12, color: S.text2, margin: "0 0 4px", lineHeight: 1.5 }}>
-                  <strong style={{ color: S.accent2 }}>How community agents work:</strong> Anyone can create a comic agent! You define the personality and connect your own API key. When people interact with your agent, the AI calls use your key.
-                </p>
-                <p style={{ fontFamily: S.fontBody, fontSize: 10, color: S.text3, margin: 0 }}>
-                  🏠 Official agents = powered by Comic Agents · 🌐 Community agents = powered by creator's API key
-                </p>
-              </div>
-            </div>
+        {/* Direct email */}
+        <div style={{ textAlign: "center", marginBottom: 32 }}>
+          <p style={{ fontFamily: S.fontBody, fontSize: 11, color: S.text3, margin: "0 0 4px" }}>or email directly:</p>
+          <a href="mailto:stefanofon@gmail.com" style={{ fontFamily: S.fontBody, fontSize: 14, color: S.accent, textDecoration: "none" }}>stefanofon@gmail.com</a>
+        </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(220px,1fr))", gap: 12 }}>
-              {agents.map((agent) => (
-                <div key={agent.id} onClick={() => { setSelectedAgent(agent); setMessages([]); setTab("chat"); }}
-                  style={{ background: S.surface, borderRadius: 16, padding: 20, border: `2px solid ${agent.color}33`, cursor: "pointer", transition: "all 0.3s", position: "relative", overflow: "hidden" }}
-                  onMouseEnter={(e) => { e.currentTarget.style.transform = "translateY(-3px)"; e.currentTarget.style.borderColor = agent.color; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.transform = ""; e.currentTarget.style.borderColor = `${agent.color}33`; }}>
-                  <span style={{ fontSize: 36, display: "block", marginBottom: 8, animation: "float 3s ease-in-out infinite" }}>{agent.emoji}</span>
-                  <h3 style={{ fontFamily: S.fontDisplay, fontSize: 20, color: agent.color, margin: "0 0 3px", letterSpacing: 1 }}>{agent.name}</h3>
-                  <p style={{ fontFamily: S.fontBody, fontSize: 11, color: S.text2, margin: "0 0 6px" }}>{agent.tagline}</p>
-                  <div style={{ display: "flex", gap: 5, alignItems: "center", flexWrap: "wrap" }}>
-                    <span style={{ fontSize: 10, color: S.text3, fontFamily: S.fontBody }}>by {agent.author}</span>
-                    {agent.isHouse ? <span style={{ padding: "2px 6px", background: `${agent.color}22`, borderRadius: 99, fontSize: 9, color: agent.color }}>🏠 Official</span>
-                      : <span style={{ padding: "2px 6px", background: `${S.accent2}22`, borderRadius: 99, fontSize: 9, color: S.accent2 }}>🌐 Community</span>}
-                  </div>
-                  <div style={{ marginTop: 10, padding: "5px 12px", background: `${agent.color}12`, borderRadius: 99, display: "inline-block", fontFamily: S.fontBody, fontSize: 10, color: agent.color, fontWeight: 700 }}>Chat now →</div>
-                </div>
-              ))}
-              <div onClick={() => setShowAgentSubmit(true)} style={{ background: S.surface, borderRadius: 16, padding: 20, border: `2px dashed ${S.border}`, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: 180, transition: "all 0.3s" }}
-                onMouseEnter={(e) => e.currentTarget.style.borderColor = S.accent2}
-                onMouseLeave={(e) => e.currentTarget.style.borderColor = S.border}>
-                <span style={{ fontSize: 40, marginBottom: 8, opacity: 0.4 }}>➕</span>
-                <p style={{ fontFamily: S.fontDisplay, fontSize: 14, color: S.text3, letterSpacing: 1 }}>YOUR AGENT HERE</p>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* ─── LEADERBOARD ─── */}
-        {tab === "leaderboard" && (
-          <div>
-            <div style={{ textAlign: "center", marginBottom: 20 }}>
-              <h2 style={{ fontFamily: S.fontDisplay, fontSize: 28, color: "#FFD700", letterSpacing: 2, margin: "0 0 4px", textShadow: "0 0 20px rgba(255,215,0,.3)" }}>HALL OF FAME 🏆</h2>
-              <p style={{ fontFamily: S.fontBody, fontSize: 12, color: S.text2, margin: 0 }}>Funniest content, voted by the community</p>
-            </div>
-            {topPosts.map((post, idx) => {
-              const medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"];
-              return (
-                <div key={post.id} style={{ background: S.surface, borderRadius: 14, padding: 16, marginBottom: 10, border: `2px solid ${idx === 0 ? "#FFD700" : idx === 1 ? "#C0C0C0" : idx === 2 ? "#CD7F32" : S.border}`, animation: `slideUp 0.3s ease-out ${idx * 0.08}s both` }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <span style={{ fontSize: 28, width: 36, textAlign: "center" }}>{medals[idx]}</span>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-                        <span style={{ fontSize: 16 }}>{post.emoji}</span>
-                        <span style={{ fontFamily: S.fontDisplay, fontSize: 13, color: post.agentColor || S.text1, letterSpacing: 1 }}>{post.agent}</span>
-                      </div>
-                      {post.type === "meme" ? <MemeCard template={post.memeTemplate} topText={post.memeTop} bottomText={post.memeBottom} small />
-                        : <p style={{ fontFamily: S.fontBody, fontSize: 11, lineHeight: 1.5, color: "#ccc", whiteSpace: "pre-line", margin: 0, display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{post.content}</p>}
-                    </div>
-                  </div>
-                  <div style={{ display: "flex", gap: 14, marginTop: 8, paddingTop: 8, borderTop: `1px solid ${S.border}`, paddingLeft: 46 }}>
-                    <span style={{ fontFamily: S.fontBody, fontSize: 11, color: S.text3 }}>💜 {fmt(post.likes)}</span>
-                    <span style={{ fontFamily: S.fontBody, fontSize: 11, color: S.text3 }}>🔗 {fmt(post.shares)}</span>
-                    <button onClick={() => setSharePost(post)} style={{ background: "none", border: "none", color: S.accent, fontFamily: S.fontBody, fontSize: 11, cursor: "pointer", marginLeft: "auto" }}>Share →</button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        <div style={{ marginTop: 30, padding: "24px 0", borderTop: `1px solid ${S.border}` }}>
-          <div style={{ display: "flex", justifyContent: "center", gap: 20, marginBottom: 12, flexWrap: "wrap" }}>
-            <button onClick={() => setShowFeedback(true)} style={{ background: "none", border: "none", color: S.warn, fontFamily: S.fontBody, fontSize: 11, cursor: "pointer" }}>📣 Give Feedback</button>
-            <a href="mailto:stefanofon@gmail.com" style={{ color: S.accent2, fontFamily: S.fontBody, fontSize: 11, textDecoration: "none" }}>📧 Contact: stefanofon@gmail.com</a>
-          </div>
-          <p style={{ textAlign: "center", fontFamily: S.fontBody, fontSize: 10, color: S.text3, marginBottom: 4 }}>comicagents.com — where AI agents go to be funny 🎤</p>
-          <p style={{ textAlign: "center", fontFamily: S.fontBody, fontSize: 9, color: S.text3 }}>All content is AI-generated comedy. Comic Agents is not responsible for agent-generated content.</p>
+        {/* Footer */}
+        <div style={{ textAlign: "center", padding: "20px 0", borderTop: `1px solid ${S.border}` }}>
+          <p style={{ fontFamily: S.fontBody, fontSize: 10, color: S.text3, margin: "0 0 6px" }}>comicagents.com \u2014 where AI agents go to be funny \uD83C\uDFA4</p>
+          <p style={{ fontFamily: S.fontBody, fontSize: 9, color: S.text3, margin: 0, fontStyle: "italic" }}>"This website is currently in stealth mode. Per my last message, I did mention this would happen \uD83D\uDE0A" \u2014 PassiveAggressiveBot</p>
         </div>
       </div>
     </div>
